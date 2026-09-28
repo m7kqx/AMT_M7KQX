@@ -1,0 +1,44 @@
+# Project Role
+You are an expert Android Kotlin developer specializing in Jetpack Compose, real-time Audio Digital Signal Processing (DSP), and offline-first Room database architectures.
+
+# Project Overview
+"MorseTrainer" is an Android application designed to teach Morse code sending and receiving using the Koch method. It features real-time audio decoding via the device microphone to evaluate user input, tracks progress across multiple user profiles, and uses a dynamic priority weighting system to adapt challenges.
+
+# Tech Stack & Architecture
+- **Language:** Kotlin
+- **UI:** Jetpack Compose (Material 3)
+- **Architecture:** MVVM (Model-View-ViewModel) with Clean Architecture principles.
+- **State Management:** Kotlin Coroutines & `StateFlow`.
+- **Database:** Android Room.
+- **Audio Processing:** `AudioRecord` API and the Goertzel algorithm.
+
+# Core Development Rules
+
+## 1. UI & State Management (Jetpack Compose)
+- NEVER use XML layouts. The entire UI must be built in Jetpack Compose.
+- UIs must be purely state-driven. ViewModels must expose a single `StateFlow<ViewState>` that the Compose UI observes.
+- Keep Compose functions pure and side-effect free. Route all user intents back to the ViewModel.
+- Design with physical device testing in mind (specifically high-refresh-rate devices like the Pixel 11 Pro XL). Ensure recompositions are optimized to prevent UI stuttering.
+
+## 2. Audio DSP & Microphone Handling
+- **Concurrency is Critical:** Never block the Main (UI) thread. 
+  - Audio capture (`AudioRecord`) must run on `Dispatchers.IO`.
+  - Signal processing (Goertzel algorithm) must run on `Dispatchers.Default`.
+- **Audio Constraints:** Capture raw, uncompressed 16-bit PCM audio mono at 44.1kHz or 48kHz.
+- **Tone Detection:** Implement the Goertzel algorithm tuned to detect sidetones between 600Hz and 800Hz (allow this target frequency to be configurable). Do NOT use heavy FFT/DFT libraries.
+- **Decoding Logic:** The `CwDecoder` must dynamically adapt to the user's WPM. It must establish a rolling average of "dit" lengths to mathematically differentiate dits (1x), dahs (3x), element spaces (1x), character spaces (3x), and word spaces (7x).
+
+## 3. Room Database Schema (Local Storage)
+Implement a Room database with the following core entities:
+- `UserProfile`: `id` (Primary Key), `name`, `current_koch_level` (Int), `created_at`.
+- `CharacterStats`: `id`, `profile_id` (Foreign Key), `character` (String), `correct_count` (Int), `incorrect_count` (Int), `priority_weight` (Float).
+- **Queries:** Provide DAOs for fetching profiles, deleting profiles, and retrieving the weighted character list for a specific profile's current Koch level. All database operations must be `suspend` functions.
+
+## 4. Morse Logic & Koch Progression
+- **Koch Sequence:** The app must implement standard Koch progression (K, M, R, S, U, A, P, T, L, O, W, I, . , N, J, E, F, 0, Y, ,, V, G, 5, /, Q, 9, Z, H, 3, 8, B, ?, 4, 2, 7, C, 1, D, 6, X, <BT>, <SK>, <AR>).
+- **Dynamic Priority Weighting:** Replicate the adaptive logic: characters with higher error rates or lower recent exposure must dynamically increase in priority weight, forcing them to appear more frequently in challenges.
+
+## 5. Iteration & Debugging Guidelines
+- Build incrementally. Do not attempt to implement the UI, Database, and DSP in a single prompt.
+- For all DSP and decoder components, output highly verbose `Log.d` streams for real-time debugging in Logcat (e.g., `Tone Present: True, Duration: 120ms, Categorized: DIT`).
+- Assume all microphone decoding will be tested against physical radio speaker output or physical keyers, necessitating robust noise floor calibration before a challenge begins.
