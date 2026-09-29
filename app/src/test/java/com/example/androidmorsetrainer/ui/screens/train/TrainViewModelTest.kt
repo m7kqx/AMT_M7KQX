@@ -142,13 +142,84 @@ class TrainViewModelTest {
         assertEquals(testProfile.id, state.activeProfile?.id)
         assertEquals(1, state.activeKochLevel)
         assertEquals(listOf("K", "M"), state.availableCharacters)
-        assertTrue(state.targetCharacter in listOf("K", "M"))
+        assertTrue(state.showStartLessonDialog)
+        assertEquals("", state.targetCharacter)
         assertEquals(0, state.sessionTotalAttempts)
+
+        // Starting lesson confirms and picks first target
+        viewModel.startLesson()
+        advanceUntilIdle()
+
+        val startedState = viewModel.uiState.value
+        assertFalse(startedState.showStartLessonDialog)
+        assertTrue(startedState.targetCharacter in listOf("K", "M"))
+        assertFalse(startedState.isReplayTone)
+    }
+
+    @Test
+    fun startLessonDialog_preventsTargetAndAudioPlaybackUntilConfirmed() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        // Prior to confirmation: no target character and dialog is showing
+        val state = viewModel.uiState.value
+        assertTrue(state.showStartLessonDialog)
+        assertEquals("", state.targetCharacter)
+        assertFalse(state.hasTarget)
+
+        // Attempting to play tone before confirmation does NOT engage the audio engine
+        viewModel.playTone()
+        advanceUntilIdle()
+        assertTrue(fakeAudioGenerator.playedCharacters.isEmpty())
+
+        // User confirms Start Lesson
+        viewModel.startLesson()
+        advanceUntilIdle()
+
+        val confirmedState = viewModel.uiState.value
+        assertFalse(confirmedState.showStartLessonDialog)
+        assertTrue(confirmedState.targetCharacter.isNotEmpty())
+        assertTrue(confirmedState.hasTarget)
+
+        // Now audio engine can be engaged
+        viewModel.playTone()
+        advanceUntilIdle()
+        assertEquals(1, fakeAudioGenerator.playedCharacters.size)
+        assertEquals(confirmedState.targetCharacter, fakeAudioGenerator.playedCharacters.first())
+    }
+
+    @Test
+    fun playReplayButtonState_togglesOnPlayAndResetsOnCorrectGuess() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        viewModel.startLesson()
+        advanceUntilIdle()
+
+        // New challenge starts with "Play Tone" state (isReplayTone = false)
+        assertFalse(viewModel.uiState.value.isReplayTone)
+
+        // Playing tone switches state to "Replay Tone" (isReplayTone = true)
+        viewModel.playTone()
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.isReplayTone)
+
+        // Incorrect guess keeps or sets state to "Replay Tone"
+        val target = viewModel.uiState.value.targetCharacter
+        val wrongGuess = if (target == "K") "M" else "K"
+        viewModel.submitGuess(wrongGuess)
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.isReplayTone)
+
+        // Correct guess generates a new challenge and explicitly resets button state back to "Play Tone"
+        val currentTarget = viewModel.uiState.value.targetCharacter
+        viewModel.submitGuess(currentTarget)
+        advanceUntilIdle()
+        assertFalse(viewModel.uiState.value.isReplayTone)
     }
 
     @Test
     fun playTone_triggersAudioGeneratorOnBackgroundThread() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
+        viewModel.startLesson()
         advanceUntilIdle()
 
         val currentTarget = viewModel.uiState.value.targetCharacter
@@ -164,6 +235,7 @@ class TrainViewModelTest {
     @Test
     fun submitGuess_correctGuessUpdatesRoomStatsAndAccuracy() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
+        viewModel.startLesson()
         advanceUntilIdle()
 
         val target = viewModel.uiState.value.targetCharacter
@@ -188,6 +260,7 @@ class TrainViewModelTest {
     @Test
     fun submitGuess_incorrectGuessUpdatesRoomStatsAndAccuracy() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
+        viewModel.startLesson()
         advanceUntilIdle()
 
         val target = viewModel.uiState.value.targetCharacter
@@ -214,6 +287,7 @@ class TrainViewModelTest {
     @Test
     fun levelProgression_reaches90PercentAccuracyThreshold_advancesKochLevelAndUpdatesProfileInRoom() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
+        viewModel.startLesson()
         advanceUntilIdle()
 
         assertEquals(1, viewModel.uiState.value.activeKochLevel)
@@ -257,6 +331,7 @@ class TrainViewModelTest {
     @Test
     fun levelProgression_belowThresholdDoesNotAdvance() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
+        viewModel.startLesson()
         advanceUntilIdle()
 
         // Make 8 correct guesses and 2 incorrect guesses -> 8 / 10 = 80.0% accuracy (< 90%)
@@ -288,6 +363,7 @@ class TrainViewModelTest {
     @Test
     fun resetSession_clearsSessionScore() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
+        viewModel.startLesson()
         advanceUntilIdle()
 
         viewModel.submitGuess(viewModel.uiState.value.targetCharacter)

@@ -14,6 +14,8 @@ data class TrainUiState(
     val availableCharacters: List<String> = emptyList(),
     val targetCharacter: String = "",
     val isPlayingAudio: Boolean = false,
+    val isReplayTone: Boolean = false,
+    val showStartLessonDialog: Boolean = false,
     val sessionTotalAttempts: Int = 0,
     val sessionCorrectAttempts: Int = 0,
     val sessionAccuracy: Float = 0.0f,

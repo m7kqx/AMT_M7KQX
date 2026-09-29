@@ -74,30 +74,64 @@ class TrainViewModel(
             return
         }
 
+        val level = profile.currentKochLevel
+        val pool = kochMethodManager.getCharactersForLevel(level)
+
+        Log.d(TAG, "Initialized profile ${profile.name} (id=${profile.id}) at Level $level, pool=${pool.joinToString()}")
+
+        _uiState.update {
+            it.copy(
+                activeProfile = profile,
+                activeKochLevel = level,
+                availableCharacters = pool,
+                targetCharacter = "",
+                isPlayingAudio = false,
+                isReplayTone = false,
+                showStartLessonDialog = true,
+                sessionTotalAttempts = 0,
+                sessionCorrectAttempts = 0,
+                sessionAccuracy = 0.0f,
+                lastGuessedCharacter = null,
+                lastGuessWasCorrect = null,
+                feedbackMessage = null,
+                levelUpMessage = null,
+                isLoading = false
+            )
+        }
+    }
+
+    /**
+     * Confirms the start of a training lesson from the Start Lesson dialog.
+     * Selects the initial target character, resets button state to "Play Tone", and dismisses the dialog.
+     */
+    fun startLesson() {
+        val currentState = _uiState.value
+        val profile = currentState.activeProfile ?: return
         viewModelScope.launch(ioDispatcher) {
-            val level = profile.currentKochLevel
-            val pool = kochMethodManager.getCharactersForLevel(level)
-            val initialTarget = pickNextTarget(profile.id, level)
-
-            Log.d(TAG, "Initialized profile ${profile.name} (id=${profile.id}) at Level $level, pool=${pool.joinToString()}, initial target=$initialTarget")
-
+            val initialTarget = pickNextTarget(profile.id, currentState.activeKochLevel)
+            Log.d(TAG, "Lesson started for profile ${profile.name} at Level ${currentState.activeKochLevel}, initial target=$initialTarget")
             _uiState.update {
                 it.copy(
-                    activeProfile = profile,
-                    activeKochLevel = level,
-                    availableCharacters = pool,
+                    showStartLessonDialog = false,
                     targetCharacter = initialTarget,
-                    sessionTotalAttempts = 0,
-                    sessionCorrectAttempts = 0,
-                    sessionAccuracy = 0.0f,
-                    lastGuessedCharacter = null,
-                    lastGuessWasCorrect = null,
-                    feedbackMessage = null,
-                    levelUpMessage = null,
-                    isLoading = false
+                    isReplayTone = false
                 )
             }
         }
+    }
+
+    /**
+     * Dismisses the Start Lesson dialog without triggering a challenge.
+     */
+    fun dismissStartLessonDialog() {
+        _uiState.update { it.copy(showStartLessonDialog = false) }
+    }
+
+    /**
+     * Re-opens the Start Lesson dialog.
+     */
+    fun openStartLessonDialog() {
+        _uiState.update { it.copy(showStartLessonDialog = true) }
     }
 
     /**
@@ -109,7 +143,7 @@ class TrainViewModel(
 
         playbackJob?.cancel()
         playbackJob = viewModelScope.launch(ioDispatcher) {
-            _uiState.update { it.copy(isPlayingAudio = true) }
+            _uiState.update { it.copy(isPlayingAudio = true, isReplayTone = true) }
             Log.d(TAG, "Playing Morse tone for character: '$target'")
             try {
                 audioGenerator.playCharacter(target)
@@ -192,7 +226,8 @@ class TrainViewModel(
                         lastGuessedCharacter = guessedCharacter,
                         lastGuessWasCorrect = isCorrect,
                         feedbackMessage = if (isCorrect) "Correct! Target was '$target'" else "Incorrect. Target was '$target', you guessed '$guessedCharacter'",
-                        levelUpMessage = "Promoted to Level $nextLevel! New character '$newlyUnlockedChar' unlocked!"
+                        levelUpMessage = "Promoted to Level $nextLevel! New character '$newlyUnlockedChar' unlocked!",
+                        isReplayTone = false
                     )
                 }
             } else {
@@ -207,7 +242,8 @@ class TrainViewModel(
                         lastGuessedCharacter = guessedCharacter,
                         lastGuessWasCorrect = isCorrect,
                         feedbackMessage = if (isCorrect) "Correct! Target was '$target'" else "Incorrect. Target was '$target', you guessed '$guessedCharacter'",
-                        levelUpMessage = null
+                        levelUpMessage = null,
+                        isReplayTone = if (isCorrect) false else true
                     )
                 }
             }
@@ -241,7 +277,8 @@ class TrainViewModel(
                     lastGuessWasCorrect = null,
                     feedbackMessage = null,
                     levelUpMessage = null,
-                    targetCharacter = nextTarget
+                    targetCharacter = nextTarget,
+                    isReplayTone = false
                 )
             }
         }

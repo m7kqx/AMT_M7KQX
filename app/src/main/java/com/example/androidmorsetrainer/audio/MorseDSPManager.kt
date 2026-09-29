@@ -38,21 +38,44 @@ open class MorseDSPManager(
     val sampleRate: Int = 44100,
     var targetFrequencyHz: Double = 700.0,
     val blockSize: Int = 512,
+    squelchThreshold: Double = DEFAULT_THRESHOLD,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) {
+    @Volatile
+    var squelchThreshold: Double = squelchThreshold
+        private set
 
     companion object {
         private const val TAG = "MorseDSP"
-        private const val DEFAULT_NOISE_FLOOR = 0.02
-        private const val DEFAULT_THRESHOLD = 0.05
+        const val DEFAULT_NOISE_FLOOR = 0.02
+        const val DEFAULT_THRESHOLD = 0.05
+        const val MIN_SQUELCH_MAGNITUDE = 0.005
+        const val MAX_SQUELCH_MAGNITUDE = 0.500
         private const val MIN_SPECTRAL_PURITY = 0.20 // 20% spectral concentration around target tone
+
+        /**
+         * Maps a normalized UI slider value (0.0 to 1.0) to underlying Goertzel magnitude scale.
+         */
+        fun squelchLevelToMagnitude(level: Float): Double {
+            val clamped = level.coerceIn(0f, 1f)
+            return MIN_SQUELCH_MAGNITUDE + clamped * (MAX_SQUELCH_MAGNITUDE - MIN_SQUELCH_MAGNITUDE)
+        }
+
+        /**
+         * Maps an underlying Goertzel magnitude scale to normalized UI slider value (0.0 to 1.0).
+         */
+        fun magnitudeToSquelchLevel(magnitude: Double): Float {
+            val clamped = magnitude.coerceIn(MIN_SQUELCH_MAGNITUDE, MAX_SQUELCH_MAGNITUDE)
+            return ((clamped - MIN_SQUELCH_MAGNITUDE) / (MAX_SQUELCH_MAGNITUDE - MIN_SQUELCH_MAGNITUDE)).toFloat()
+        }
     }
 
     private val goertzelDetector = GoertzelDetector(
         sampleRate = sampleRate,
         targetFrequencyHz = targetFrequencyHz,
-        blockSize = blockSize
+        blockSize = blockSize,
+        squelchThreshold = squelchThreshold
     )
 
     data class DSPState(
@@ -104,6 +127,18 @@ open class MorseDSPManager(
     }
 
     /**
+     * Thread-safely updates the Goertzel detection squelch threshold.
+     * Updates mutable volatile threshold without blocking active audio recording.
+     */
+    open fun setSquelchThreshold(threshold: Double) {
+        val clamped = threshold.coerceIn(MIN_SQUELCH_MAGNITUDE, MAX_SQUELCH_MAGNITUDE)
+        squelchThreshold = clamped
+        goertzelDetector.setSquelchThreshold(clamped)
+        _dspState.update { it.copy(detectionThreshold = clamped) }
+        Log.d(TAG, "Squelch threshold updated to ${String.format("%.3f", clamped)}")
+    }
+
+    /**
      * Checks if RECORD_AUDIO permission has been granted.
      */
     open fun hasRecordPermission(): Boolean {
@@ -150,6 +185,7 @@ open class MorseDSPManager(
         }
 
         val newThreshold = max(DEFAULT_THRESHOLD, avgNoise * 2.8)
+        setSquelchThreshold(newThreshold)
         _dspState.update {
             it.copy(
                 isCalibrating = false,
@@ -242,7 +278,7 @@ open class MorseDSPManager(
 
                     val result = goertzelDetector.process(buffer)
                     val now = System.currentTimeMillis()
-                    val threshold = _dspState.value.detectionThreshold
+                    val threshold = squelchThreshold
 
                     // Evaluates tone presence based on magnitude and spectral purity
                     val isToneDetected = result.targetMagnitude >= threshold &&

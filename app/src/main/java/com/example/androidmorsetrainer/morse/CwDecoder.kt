@@ -4,8 +4,11 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -33,6 +36,9 @@ class CwDecoder(
 
     private val _decodedText = MutableStateFlow("")
     val decodedText: StateFlow<String> = _decodedText.asStateFlow()
+
+    private val _characterEvents = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    val characterEvents: SharedFlow<String> = _characterEvents.asSharedFlow()
 
     private val _currentSymbol = MutableStateFlow("")
     val currentSymbol: StateFlow<String> = _currentSymbol.asStateFlow()
@@ -107,6 +113,7 @@ class CwDecoder(
         Log.d(TAG, "Decoded Character: '$char' (Pattern: '$symbol')")
 
         _decodedText.update { it + char }
+        _characterEvents.tryEmit(char)
         _currentSymbol.value = ""
     }
 

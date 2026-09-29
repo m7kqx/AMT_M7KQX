@@ -12,8 +12,12 @@ import kotlin.math.sqrt
 class GoertzelDetector(
     val sampleRate: Int = 44100,
     var targetFrequencyHz: Double = 700.0,
-    val blockSize: Int = 512
+    val blockSize: Int = 512,
+    squelchThreshold: Double = 0.05
 ) {
+    @Volatile
+    var squelchThreshold: Double = squelchThreshold
+        private set
     private var coeff: Double = 0.0
 
     init {
@@ -28,6 +32,13 @@ class GoertzelDetector(
         updateCoeff()
     }
 
+    /**
+     * Thread-safely updates the Goertzel squelch magnitude threshold.
+     */
+    fun setSquelchThreshold(threshold: Double) {
+        squelchThreshold = threshold
+    }
+
     private fun updateCoeff() {
         val omega = 2.0 * Math.PI * (targetFrequencyHz / sampleRate)
         coeff = 2.0 * cos(omega)
@@ -36,7 +47,8 @@ class GoertzelDetector(
     data class DetectionResult(
         val targetMagnitude: Double,
         val totalRms: Double,
-        val spectralPurity: Double // Ratio of tone energy to overall energy (0.0 to 1.0)
+        val spectralPurity: Double, // Ratio of tone energy to overall energy (0.0 to 1.0)
+        val isToneDetected: Boolean = false
     )
 
     /**
@@ -72,10 +84,13 @@ class GoertzelDetector(
             0.0
         }
 
+        val isToneDetected = magnitude >= squelchThreshold && spectralPurity >= 0.20
+
         return DetectionResult(
             targetMagnitude = magnitude,
             totalRms = totalRms,
-            spectralPurity = spectralPurity
+            spectralPurity = spectralPurity,
+            isToneDetected = isToneDetected
         )
     }
 }

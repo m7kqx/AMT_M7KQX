@@ -32,6 +32,8 @@ import com.example.androidmorsetrainer.ui.screens.decode.DecodeScreen
 import com.example.androidmorsetrainer.ui.screens.decode.DecodeViewModel
 import com.example.androidmorsetrainer.ui.screens.profiles.ProfilesScreen
 import com.example.androidmorsetrainer.ui.screens.profiles.ProfilesViewModel
+import com.example.androidmorsetrainer.ui.screens.send.SendScreen
+import com.example.androidmorsetrainer.ui.screens.send.SendViewModel
 import com.example.androidmorsetrainer.ui.screens.train.TrainScreen
 import com.example.androidmorsetrainer.ui.screens.train.TrainViewModel
 import com.example.androidmorsetrainer.ui.theme.AndroidMorseTrainerTheme
@@ -54,6 +56,7 @@ class MainActivity : ComponentActivity() {
 fun MorseTrainerApp(
     profilesViewModel: ProfilesViewModel = viewModel(factory = ProfilesViewModel.Factory),
     trainViewModel: TrainViewModel = viewModel(factory = TrainViewModel.Factory),
+    sendViewModel: SendViewModel = viewModel(factory = SendViewModel.Factory),
     decodeViewModel: DecodeViewModel = viewModel(factory = DecodeViewModel.Factory)
 ) {
     val profilesUiState by profilesViewModel.uiState.collectAsStateWithLifecycle()
@@ -70,6 +73,7 @@ fun MorseTrainerApp(
                         Text(
                             text = when (currentTab) {
                                 NavigationTab.TRAIN -> "Koch Morse Trainer"
+                                NavigationTab.SEND -> "Hardware Keying Practice"
                                 NavigationTab.DECODE -> "Morse Decoder"
                                 NavigationTab.PROFILES -> "User Profiles"
                             },
@@ -118,6 +122,13 @@ fun MorseTrainerApp(
                 TrainScreen(
                     activeProfile = profilesUiState.activeProfile,
                     viewModel = trainViewModel,
+                    modifier = contentModifier
+                )
+            }
+            NavigationTab.SEND -> {
+                SendScreen(
+                    activeProfile = profilesUiState.activeProfile,
+                    viewModel = sendViewModel,
                     modifier = contentModifier
                 )
             }

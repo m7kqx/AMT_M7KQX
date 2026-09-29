@@ -3,6 +3,7 @@ package com.example.androidmorsetrainer.ui.navigation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.School
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -12,6 +13,7 @@ enum class NavigationTab(
     val contentDescription: String
 ) {
     TRAIN("Train", Icons.Default.School, "Navigate to Training screen"),
+    SEND("Send", Icons.Default.Radio, "Navigate to Hardware Keying Send screen"),
     DECODE("Decode", Icons.Default.Hearing, "Navigate to Morse Decoder screen"),
     PROFILES("Profiles", Icons.Default.Person, "Navigate to User Profiles screen")
 }

@@ -57,11 +57,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -114,6 +116,7 @@ fun DecodeScreen(
         onCalibrate = viewModel::calibrateNoiseFloor,
         onClearText = viewModel::clearDecodedText,
         onDismissMessage = viewModel::clearUserMessage,
+        onSquelchChange = viewModel::setSquelchLevel,
         modifier = modifier
     )
 }
@@ -128,6 +131,7 @@ fun DecodeScreenContent(
     onCalibrate: () -> Unit,
     onClearText: () -> Unit,
     onDismissMessage: () -> Unit,
+    onSquelchChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -231,7 +235,14 @@ fun DecodeScreenContent(
             targetFreqHz = uiState.targetFrequencyHz
         )
 
-        // 5. Live Decoded CW Teletype Terminal
+        // 5. Dynamic Squelch Magnitude Threshold Slider Control
+        SdrSquelchControlCard(
+            squelchLevel = uiState.squelchLevel,
+            detectionThreshold = uiState.detectionThreshold,
+            onSquelchChange = onSquelchChange
+        )
+
+        // 6. Live Decoded CW Teletype Terminal
         DecodedTeletypeCard(
             decodedText = uiState.decodedText,
             currentMorseSymbol = uiState.currentMorseSymbol,
@@ -486,22 +497,12 @@ private fun SdrOscilloscopeCard(
                     )
                 }
 
-                Surface(
-                    color = if (isTonePresent) SdrPhosphorActive.copy(alpha = 0.15f) else Color(0xFF1E293B),
-                    shape = RoundedCornerShape(4.dp),
-                    border = BorderStroke(1.dp, if (isTonePresent) SdrPhosphorActive else Color(0xFF334155))
-                ) {
-                    Text(
-                        text = if (isTonePresent) "● TONE DETECTED" else if (isListening) "RUNNING" else "STANDBY",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp
-                        ),
-                        fontWeight = FontWeight.Bold,
-                        color = if (isTonePresent) SdrPhosphorActive else Color(0xFF94A3B8),
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(if (isTonePresent) Color(0xFF10B981) else MaterialTheme.colorScheme.error)
+                )
             }
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -553,6 +554,8 @@ private fun SdrCanvasWaveform(
     detectionThreshold: Double,
     modifier: Modifier = Modifier
 ) {
+    val dashedEffect = remember { PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f) }
+
     Canvas(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
@@ -595,7 +598,6 @@ private fun SdrCanvasWaveform(
         // Threshold boundary markers
         val thresholdYOffset = (detectionThreshold.toFloat() * centerY * 2.5f).coerceIn(0f, centerY - 6f)
         if (thresholdYOffset > 0f) {
-            val dashedEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
             drawLine(
                 color = SdrThresholdLine.copy(alpha = 0.6f),
                 start = Offset(0f, centerY - thresholdYOffset),
@@ -646,6 +648,75 @@ private fun SdrCanvasWaveform(
                 start = Offset(x, centerY - barHalfHeight),
                 end = Offset(x, centerY + barHalfHeight),
                 strokeWidth = max(1.2f, stepX * 0.75f)
+            )
+        }
+    }
+}
+
+/**
+ * Dynamic User-Adjustable Squelch Threshold Control Panel.
+ * Maps normalized UI slider (0.0 .. 1.0) to underlying Goertzel magnitude detection threshold.
+ */
+@Composable
+private fun SdrSquelchControlCard(
+    squelchLevel: Float,
+    detectionThreshold: Double,
+    onSquelchChange: (Float) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "SQUELCH THRESHOLD",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            letterSpacing = 1.sp,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    text = String.format("%.3f mag (%.0f%%)", detectionThreshold, squelchLevel * 100f),
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Slider(
+                value = squelchLevel,
+                onValueChange = onSquelchChange,
+                valueRange = 0f..1f,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = "Adjust threshold above ambient noise floor line on oscilloscope.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
         }
     }

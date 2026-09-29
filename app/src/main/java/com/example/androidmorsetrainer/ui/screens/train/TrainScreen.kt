@@ -1,6 +1,8 @@
 package com.example.androidmorsetrainer.ui.screens.train
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -78,15 +81,96 @@ fun TrainScreen(
     if (activeProfile == null) {
         NoProfileScreen(modifier = modifier)
     } else {
+        if (uiState.showStartLessonDialog) {
+            StartLessonDialog(
+                kochLevel = uiState.activeKochLevel,
+                profileName = activeProfile.name,
+                availableCharacters = uiState.availableCharacters,
+                onConfirm = viewModel::startLesson,
+                onDismiss = viewModel::dismissStartLessonDialog
+            )
+        }
+
         TrainScreenContent(
             uiState = uiState,
             onPlayTone = viewModel::playTone,
             onGuess = viewModel::submitGuess,
             onResetSession = viewModel::resetSession,
             onDismissLevelUpMessage = viewModel::dismissLevelUpMessage,
+            onStartLesson = viewModel::startLesson,
             modifier = modifier
         )
     }
+}
+
+@Composable
+private fun StartLessonDialog(
+    kochLevel: Int,
+    profileName: String,
+    availableCharacters: List<String>,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.School,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
+            )
+        },
+        title = {
+            Text(
+                text = "Start Lesson",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = if (profileName.isNotEmpty()) {
+                        "Ready to begin training for $profileName at Koch Level $kochLevel?"
+                    } else {
+                        "Ready to begin training at Koch Level $kochLevel?"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (availableCharacters.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Active Characters: ${availableCharacters.joinToString(" ")}",
+                        style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Start Lesson")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        shape = RoundedCornerShape(24.dp)
+    )
 }
 
 @Composable
@@ -147,6 +231,7 @@ fun TrainScreenContent(
     onGuess: (String) -> Unit,
     onResetSession: () -> Unit,
     onDismissLevelUpMessage: () -> Unit,
+    onStartLesson: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     // Dynamic grid scaling: cleanly balances small character pools (Level 1-3)
@@ -213,8 +298,8 @@ fun TrainScreenContent(
             PlayToneButton(
                 isPlaying = uiState.isPlayingAudio,
                 hasTarget = uiState.hasTarget,
-                hasGuessedBefore = uiState.lastGuessedCharacter != null,
-                onClick = onPlayTone
+                isReplay = uiState.isReplayTone,
+                onClick = if (uiState.hasTarget) onPlayTone else onStartLesson
             )
         }
 
@@ -234,18 +319,73 @@ fun TrainScreenContent(
             }
         }
 
-        // 7. Dynamic Grid of Answer Buttons for Active Characters
-        items(uiState.availableCharacters, key = { it }) { character ->
-            val isLastGuessed = uiState.lastGuessedCharacter == character
-            val morseCode = MorseConstants.MORSE_MAP[character.uppercase()] ?: ""
-            AnswerButton(
-                character = character,
-                morseCode = morseCode,
-                isLastGuessed = isLastGuessed,
-                lastGuessCorrect = if (isLastGuessed) uiState.lastGuessWasCorrect else null,
-                enabled = uiState.hasTarget,
-                onClick = { onGuess(character) }
-            )
+        // 7. Dynamic Grid of Answer Buttons with Crossfade animation on challenge state change
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Crossfade(
+                targetState = uiState.targetCharacter,
+                animationSpec = tween(durationMillis = 250),
+                label = "challengeTransition"
+            ) { _ ->
+                AnswerGrid(
+                    availableCharacters = uiState.availableCharacters,
+                    lastGuessedCharacter = uiState.lastGuessedCharacter,
+                    lastGuessWasCorrect = uiState.lastGuessWasCorrect,
+                    hasTarget = uiState.hasTarget,
+                    onGuess = onGuess
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnswerGrid(
+    availableCharacters: List<String>,
+    lastGuessedCharacter: String?,
+    lastGuessWasCorrect: Boolean?,
+    hasTarget: Boolean,
+    onGuess: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val columnsCount = when {
+        availableCharacters.size <= 2 -> 2
+        availableCharacters.size == 3 -> 3
+        availableCharacters.size == 4 -> 4
+        availableCharacters.size <= 8 -> 4
+        else -> 5
+    }
+
+    val rows = availableCharacters.chunked(columnsCount)
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        rows.forEach { rowItems ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                rowItems.forEach { character ->
+                    val isLastGuessed = lastGuessedCharacter == character
+                    val morseCode = MorseConstants.MORSE_MAP[character.uppercase()] ?: ""
+                    Box(modifier = Modifier.weight(1f)) {
+                        AnswerButton(
+                            character = character,
+                            morseCode = morseCode,
+                            isLastGuessed = isLastGuessed,
+                            lastGuessCorrect = if (isLastGuessed) lastGuessWasCorrect else null,
+                            enabled = hasTarget,
+                            onClick = { onGuess(character) }
+                        )
+                    }
+                }
+                if (rowItems.size < columnsCount) {
+                    repeat(columnsCount - rowItems.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
         }
     }
 }
@@ -562,12 +702,12 @@ private fun GuessFeedbackBanner(
 private fun PlayToneButton(
     isPlaying: Boolean,
     hasTarget: Boolean,
-    hasGuessedBefore: Boolean,
+    isReplay: Boolean,
     onClick: () -> Unit
 ) {
     Button(
         onClick = onClick,
-        enabled = hasTarget && !isPlaying,
+        enabled = if (hasTarget) !isPlaying else true,
         modifier = Modifier
             .fillMaxWidth()
             .height(64.dp),
@@ -595,16 +735,30 @@ private fun PlayToneButton(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimary
                 )
-            } else {
+            } else if (!hasTarget) {
                 Icon(
-                    imageVector = if (hasGuessedBefore) Icons.Default.GraphicEq else Icons.AutoMirrored.Filled.VolumeUp,
+                    imageVector = Icons.Default.School,
                     contentDescription = null,
                     modifier = Modifier.size(28.dp),
                     tint = MaterialTheme.colorScheme.onPrimary
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = if (hasGuessedBefore) "Replay Tone" else "Play Morse Tone",
+                    text = "Start Lesson",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimary
+                )
+            } else {
+                Icon(
+                    imageVector = if (isReplay) Icons.Default.GraphicEq else Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = null,
+                    modifier = Modifier.size(28.dp),
+                    tint = MaterialTheme.colorScheme.onPrimary
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = if (isReplay) "Replay Tone" else "Play Tone",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimary

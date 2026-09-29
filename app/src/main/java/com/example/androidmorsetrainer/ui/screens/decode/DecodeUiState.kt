@@ -26,6 +26,7 @@ data class DecodeUiState(
     val currentMagnitude: Double = 0.0,
     val spectralPurity: Double = 0.0,
     val detectionThreshold: Double = 0.05,
+    val squelchLevel: Float = 0.091f,
     val noiseFloor: Double = 0.02,
     val rawAmplitudes: List<Float> = emptyList(),
     val amplitudePoints: List<AmplitudePoint> = emptyList(),

@@ -52,11 +52,18 @@ class DecodeViewModel(
         DecodeUiState(
             hasRecordPermission = dspManager.hasRecordPermission(),
             targetFrequencyHz = dspManager.targetFrequencyHz,
+            detectionThreshold = dspManager.squelchThreshold,
+            squelchLevel = MorseDSPManager.magnitudeToSquelchLevel(dspManager.squelchThreshold),
             rawAmplitudes = List(MAX_AMPLITUDE_POINTS) { 0.0f },
             amplitudePoints = List(MAX_AMPLITUDE_POINTS) { AmplitudePoint(0.0f, false) }
         )
     )
     val uiState: StateFlow<DecodeUiState> = _uiState.asStateFlow()
+
+    private val _squelchLevel = MutableStateFlow(
+        MorseDSPManager.magnitudeToSquelchLevel(dspManager.squelchThreshold)
+    )
+    val squelchLevel: StateFlow<Float> = _squelchLevel.asStateFlow()
 
     private val _rawAmplitudes = MutableStateFlow(List(MAX_AMPLITUDE_POINTS) { 0.0f })
     val rawAmplitudes: StateFlow<List<Float>> = _rawAmplitudes.asStateFlow()
@@ -78,7 +85,9 @@ class DecodeViewModel(
     private fun observeDspState() {
         viewModelScope.launch {
             dspManager.dspState.collect { dsp ->
+                val level = MorseDSPManager.magnitudeToSquelchLevel(dsp.detectionThreshold)
                 _isToneDetected.value = dsp.isTonePresent
+                _squelchLevel.value = level
                 _uiState.update {
                     it.copy(
                         isListening = dsp.isListening,
@@ -87,11 +96,22 @@ class DecodeViewModel(
                         currentMagnitude = dsp.currentMagnitude,
                         spectralPurity = dsp.spectralPurity,
                         noiseFloor = dsp.noiseFloor,
-                        detectionThreshold = dsp.detectionThreshold
+                        detectionThreshold = dsp.detectionThreshold,
+                        squelchLevel = level
                     )
                 }
             }
         }
+    }
+
+    /**
+     * Updates the Goertzel detection squelch threshold from a normalized UI slider level (0.0 to 1.0).
+     */
+    fun setSquelchLevel(level: Float) {
+        val clamped = level.coerceIn(0f, 1f)
+        _squelchLevel.value = clamped
+        val magnitude = MorseDSPManager.squelchLevelToMagnitude(clamped)
+        dspManager.setSquelchThreshold(magnitude)
     }
 
     private fun observeToneEvents() {
