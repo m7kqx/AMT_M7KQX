@@ -349,7 +349,7 @@ private fun SendPreDrillSetupContent(
 
                     // Pitch Selector Chips
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf(600.0, 700.0, 800.0).forEach { freq ->
+                        listOf(550.0, 600.0, 650.0, 700.0).forEach { freq ->
                             val isSelected = uiState.targetFrequencyHz == freq
                             FilterChip(
                                 selected = isSelected,
@@ -1004,7 +1004,7 @@ private fun SendToneDetectorStatusCard(
 
                 // Quick Pitch Tuning Chips
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(600.0, 700.0, 800.0).forEach { freq ->
+                    listOf(550.0, 600.0, 650.0, 700.0).forEach { freq ->
                         val isSelected = targetFreqHz == freq
                         FilterChip(
                             selected = isSelected,

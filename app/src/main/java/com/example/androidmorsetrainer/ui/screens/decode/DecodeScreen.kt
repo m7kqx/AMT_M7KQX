@@ -225,6 +225,14 @@ fun DecodeScreenContent(
             onSetFrequency = onSetFrequency
         )
 
+        DecodeCalibrationControls(
+            isListening = uiState.isListening,
+            isCalibrating = uiState.isCalibrating,
+            isAutoTuning = uiState.isAutoTuning,
+            onCalibrate = onCalibrate,
+            onAutoDetectPitch = onAutoDetectPitch
+        )
+        
         // 4. Dark, High-Contrast SDR Waterfall / Oscilloscope Canvas Visualizer
         SdrOscilloscopeCard(
             amplitudePoints = uiState.amplitudePoints,
@@ -251,14 +259,10 @@ fun DecodeScreenContent(
             onClearText = onClearText
         )
 
-        // 6. Controls Toolbar (Primary Receiver toggle, Auto-Detect Pitch button, Calibrate button)
+        // 6. Controls Toolbar (Primary Receiver toggle)
         DecodeControlsToolbar(
             isListening = uiState.isListening,
-            isCalibrating = uiState.isCalibrating,
-            isAutoTuning = uiState.isAutoTuning,
-            onToggleListening = onToggleListening,
-            onCalibrate = onCalibrate,
-            onAutoDetectPitch = onAutoDetectPitch
+            onToggleListening = onToggleListening
         )
     }
 }
@@ -364,7 +368,7 @@ private fun SdrTargetFrequencyPanel(
                 }
 
                 // Quick Frequency Tuning Selector Chips with Auto-Detected frequency support
-                val baseFreqs = listOf(600.0, 700.0, 800.0)
+                val baseFreqs = listOf(550.0, 600.0, 650.0, 700.0)
                 val displayFreqs = if (autoTunedFrequencyHz != null && autoTunedFrequencyHz !in baseFreqs) {
                     baseFreqs + autoTunedFrequencyHz
                 } else {
@@ -859,120 +863,122 @@ private fun DecodedTeletypeCard(
 }
 
 /**
- * Receiver Controls Toolbar for starting/stopping stream, auto-detecting CW pitch, and calibrating noise floor.
+ * Calibration Controls Toolbar for auto-detecting CW pitch and calibrating noise floor.
+ */
+@Composable
+private fun DecodeCalibrationControls(
+    isListening: Boolean,
+    isCalibrating: Boolean,
+    isAutoTuning: Boolean,
+    onCalibrate: () -> Unit,
+    onAutoDetectPitch: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Auto-Detect Pitch Button
+        Button(
+            onClick = onAutoDetectPitch,
+            enabled = !isAutoTuning && !isCalibrating,
+            modifier = Modifier
+                .weight(1.1f)
+                .height(50.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        ) {
+            if (isAutoTuning) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Detecting...",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.AutoFixHigh,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Auto-Detect Pitch",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        // Calibrate Noise Floor Button
+        OutlinedButton(
+            onClick = onCalibrate,
+            enabled = isListening && !isCalibrating && !isAutoTuning,
+            modifier = Modifier
+                .weight(0.9f)
+                .height(50.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            if (isCalibrating) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(text = "Calibrating...", style = MaterialTheme.typography.labelSmall)
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Calibrate",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Receiver Controls Toolbar for starting/stopping stream.
  */
 @Composable
 private fun DecodeControlsToolbar(
     isListening: Boolean,
-    isCalibrating: Boolean,
-    isAutoTuning: Boolean,
-    onToggleListening: () -> Unit,
-    onCalibrate: () -> Unit,
-    onAutoDetectPitch: () -> Unit
+    onToggleListening: () -> Unit
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+    // Primary Action: Start / Stop Receiver
+    Button(
+        onClick = onToggleListening,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(54.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (isListening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+        )
     ) {
-        // Primary Action: Start / Stop Receiver
-        Button(
-            onClick = onToggleListening,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (isListening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-            )
-        ) {
-            Icon(
-                imageVector = if (isListening) Icons.Default.MicOff else Icons.Default.Mic,
-                contentDescription = null
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = if (isListening) "Stop Receiver" else "Start Receiver",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        // Secondary Action Row: Auto-Detect Pitch & Calibrate Noise Floor
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Auto-Detect Pitch Button
-            Button(
-                onClick = onAutoDetectPitch,
-                enabled = !isAutoTuning && !isCalibrating,
-                modifier = Modifier
-                    .weight(1.1f)
-                    .height(50.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            ) {
-                if (isAutoTuning) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Detecting...",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.AutoFixHigh,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Auto-Detect Pitch",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            // Calibrate Noise Floor Button
-            OutlinedButton(
-                onClick = onCalibrate,
-                enabled = isListening && !isCalibrating && !isAutoTuning,
-                modifier = Modifier
-                    .weight(0.9f)
-                    .height(50.dp),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                if (isCalibrating) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = "Calibrating...", style = MaterialTheme.typography.labelSmall)
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Calibrate",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-        }
+        Icon(
+            imageVector = if (isListening) Icons.Default.MicOff else Icons.Default.Mic,
+            contentDescription = null
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = if (isListening) "Stop Receiver" else "Start Receiver",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 

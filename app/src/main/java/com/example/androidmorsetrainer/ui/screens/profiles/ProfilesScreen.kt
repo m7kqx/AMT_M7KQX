@@ -238,7 +238,7 @@ private fun ProfilesList(
 }
 
 /**
- * Intuitive, clear card layout for user entries (e.g. displaying M7KQX with its current Koch level).
+ * Intuitive, clear card layout for user entries (e.g. displaying M7ABC with its current Koch level).
  */
 @Composable
 private fun ProfileCard(
@@ -448,7 +448,7 @@ private fun EmptyProfilesView(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Create a profile (e.g., M7KQX or your name) to track your Koch Morse training progression and accuracy over time.",
+            text = "Create a profile (e.g., M7ABC or your name) to track your Koch Morse training progression and accuracy over time.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -497,7 +497,7 @@ private fun AddProfileDialog(
                     value = nameInput,
                     onValueChange = onNameChange,
                     label = { Text("Callsign or Name") },
-                    placeholder = { Text("e.g., M7KQX") },
+                    placeholder = { Text("e.g., M7ABC") },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
