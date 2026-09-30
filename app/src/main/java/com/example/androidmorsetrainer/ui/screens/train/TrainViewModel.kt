@@ -21,25 +21,25 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlin.math.min
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * ViewModel managing the interactive Koch method training screen.
- * Handles audio synthesis trigger, answer evaluation, Room database statistics updates,
- * adaptive priority weighting, and automatic Koch level progression at 90% accuracy.
+ * ViewModel managing the interactive Koch method training screen (Receive Mode).
+ * Implements pre-drill setup configuration, finite drill batches, and
+ * v1.7 dynamic priority challenge weighting and advancement logic.
  */
 class TrainViewModel(
     private val profileRepository: ProfileRepository,
     private val kochMethodManager: KochMethodManager,
     private val audioGenerator: MorseAudioGenerator,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    val minAttemptsForLevelUp: Int = DEFAULT_MIN_ATTEMPTS
+    val defaultDrillLength: Int = DEFAULT_DRILL_LENGTH
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "TrainViewModel"
-        const val DEFAULT_MIN_ATTEMPTS = 10
-        const val ACCURACY_THRESHOLD_PERCENT = 90.0f
+        const val DEFAULT_DRILL_LENGTH = 20
+        const val DEFAULT_MIN_ATTEMPTS = 5
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
@@ -53,23 +53,41 @@ class TrainViewModel(
         }
     }
 
-    private val _uiState = MutableStateFlow(TrainUiState())
+    private val _uiState = MutableStateFlow(
+        TrainUiState(
+            selectedDrillLength = defaultDrillLength,
+            sessionBatchSize = defaultDrillLength
+        )
+    )
     val uiState: StateFlow<TrainUiState> = _uiState.asStateFlow()
 
+    private val sessionCharacterAttempts = ConcurrentHashMap<String, Int>()
     private var playbackJob: Job? = null
 
     /**
+     * Identifies characters where historical accuracy in Room meets proficiency (>= 5 attempts and >= 70%).
+     * Visual Morse dotreps are hidden for these mastered characters.
+     */
+    private suspend fun loadMasteredCharacters(profileId: Long): Set<String> {
+        val stats = profileRepository.getStatsForProfile(profileId)
+        return stats.filter { stat ->
+            kochMethodManager.isProficient(stat.correctCount, stat.incorrectCount)
+        }.map { it.character.uppercase() }.toSet()
+    }
+
+    /**
      * Sets or updates the active profile.
-     * Preserves current challenge if the same profile and level are retained.
+     * Transitions screen into the Pre-Drill Setup state (isSessionActive = false, isSessionFinished = false).
      */
     fun setActiveProfile(profile: UserProfile?) {
         if (profile == null) {
+            sessionCharacterAttempts.clear()
             _uiState.update { TrainUiState() }
             return
         }
 
         val currentProfile = _uiState.value.activeProfile
-        if (currentProfile?.id == profile.id && currentProfile.currentKochLevel == profile.currentKochLevel) {
+        if (currentProfile?.id == profile.id && currentProfile.currentKochLevel == profile.currentKochLevel && _uiState.value.isSessionActive) {
             _uiState.update { it.copy(activeProfile = profile) }
             return
         }
@@ -79,41 +97,83 @@ class TrainViewModel(
 
         Log.d(TAG, "Initialized profile ${profile.name} (id=${profile.id}) at Level $level, pool=${pool.joinToString()}")
 
+        viewModelScope.launch(ioDispatcher) {
+            val mastered = loadMasteredCharacters(profile.id)
+            sessionCharacterAttempts.clear()
+            _uiState.update {
+                it.copy(
+                    activeProfile = profile,
+                    activeKochLevel = level,
+                    availableCharacters = pool,
+                    targetCharacter = "",
+                    isPlayingAudio = false,
+                    isReplayTone = false,
+                    showStartLessonDialog = false,
+                    isSessionActive = false,
+                    isSessionFinished = false,
+                    currentChallengeIndex = 0,
+                    sessionTotalAttempts = 0,
+                    sessionCorrectAttempts = 0,
+                    sessionAccuracy = 0.0f,
+                    lastGuessedCharacter = null,
+                    lastGuessWasCorrect = null,
+                    feedbackMessage = null,
+                    levelUpMessage = null,
+                    masteredCharacters = mastered,
+                    sessionCharacterAttempts = emptyMap(),
+                    isLoading = false
+                )
+            }
+        }
+    }
+
+    /**
+     * Updates the user-selected drill length from the Pre-Drill Setup screen (e.g. 20, 50, 100).
+     */
+    fun setDrillLength(length: Int) {
+        val clamped = length.coerceIn(5, 500)
         _uiState.update {
             it.copy(
-                activeProfile = profile,
-                activeKochLevel = level,
-                availableCharacters = pool,
-                targetCharacter = "",
-                isPlayingAudio = false,
-                isReplayTone = false,
-                showStartLessonDialog = true,
-                sessionTotalAttempts = 0,
-                sessionCorrectAttempts = 0,
-                sessionAccuracy = 0.0f,
-                lastGuessedCharacter = null,
-                lastGuessWasCorrect = null,
-                feedbackMessage = null,
-                levelUpMessage = null,
-                isLoading = false
+                selectedDrillLength = clamped,
+                sessionBatchSize = clamped
             )
         }
     }
 
     /**
-     * Confirms the start of a training lesson from the Start Lesson dialog.
-     * Selects the initial target character, resets button state to "Play Tone", and dismisses the dialog.
+     * Initiates an active training drill with the specified or pre-selected length.
+     * Selects the initial target character using v1.7 dynamic priority weighting.
      */
-    fun startLesson() {
+    fun startLesson(drillLength: Int? = null) {
         val currentState = _uiState.value
         val profile = currentState.activeProfile ?: return
+        val batchSize = drillLength ?: currentState.selectedDrillLength
+
         viewModelScope.launch(ioDispatcher) {
+            sessionCharacterAttempts.clear()
             val initialTarget = pickNextTarget(profile.id, currentState.activeKochLevel)
-            Log.d(TAG, "Lesson started for profile ${profile.name} at Level ${currentState.activeKochLevel}, initial target=$initialTarget")
+            val mastered = loadMasteredCharacters(profile.id)
+
+            Log.d(TAG, "Receive Drill started for profile ${profile.name} at Level ${currentState.activeKochLevel}, batch=$batchSize, initial target=$initialTarget")
+
             _uiState.update {
                 it.copy(
+                    selectedDrillLength = batchSize,
+                    sessionBatchSize = batchSize,
+                    currentChallengeIndex = 1,
+                    isSessionActive = true,
+                    isSessionFinished = false,
                     showStartLessonDialog = false,
                     targetCharacter = initialTarget,
+                    sessionTotalAttempts = 0,
+                    sessionCorrectAttempts = 0,
+                    sessionAccuracy = 0.0f,
+                    masteredCharacters = mastered,
+                    sessionCharacterAttempts = emptyMap(),
+                    lastGuessedCharacter = null,
+                    lastGuessWasCorrect = null,
+                    feedbackMessage = null,
+                    levelUpMessage = null,
                     isReplayTone = false
                 )
             }
@@ -121,14 +181,31 @@ class TrainViewModel(
     }
 
     /**
-     * Dismisses the Start Lesson dialog without triggering a challenge.
+     * Navigates back to the Pre-Drill Setup view from a summary screen.
+     */
+    fun returnToSetup() {
+        sessionCharacterAttempts.clear()
+        _uiState.update {
+            it.copy(
+                isSessionActive = false,
+                isSessionFinished = false,
+                currentChallengeIndex = 0,
+                targetCharacter = "",
+                feedbackMessage = null,
+                levelUpMessage = null
+            )
+        }
+    }
+
+    /**
+     * Dismisses the Start Lesson dialog (legacy compatibility).
      */
     fun dismissStartLessonDialog() {
         _uiState.update { it.copy(showStartLessonDialog = false) }
     }
 
     /**
-     * Re-opens the Start Lesson dialog.
+     * Opens the Start Lesson dialog (legacy compatibility).
      */
     fun openStartLessonDialog() {
         _uiState.update { it.copy(showStartLessonDialog = true) }
@@ -139,7 +216,7 @@ class TrainViewModel(
      */
     fun playTone() {
         val target = _uiState.value.targetCharacter
-        if (target.isEmpty()) return
+        if (target.isEmpty() || !_uiState.value.isSessionActive) return
 
         playbackJob?.cancel()
         playbackJob = viewModelScope.launch(ioDispatcher) {
@@ -159,21 +236,20 @@ class TrainViewModel(
 
     /**
      * Processes a user guess against the current target character.
-     * Updates Room CharacterStats with adaptive priority weights,
-     * checks for Koch level advancement (>= 90% accuracy over minimum attempts),
-     * and picks the next target character.
+     * Updates Room CharacterStats, evaluates v1.7 Koch advancement on the latest level character,
+     * updates session deprivation metrics, and halts at completion screen when the batch finishes.
      */
     fun submitGuess(guessedCharacter: String) {
         val currentState = _uiState.value
         val profile = currentState.activeProfile ?: return
         val target = currentState.targetCharacter
-        if (target.isEmpty()) return
+        if (target.isEmpty() || !currentState.isSessionActive || currentState.isSessionFinished) return
 
         val isCorrect = guessedCharacter.equals(target, ignoreCase = true)
-        Log.d(TAG, "Guess submitted: '$guessedCharacter', Target: '$target', isCorrect=$isCorrect")
+        Log.d(TAG, "Guess submitted: '$guessedCharacter', Target: '$target', isCorrect=$isCorrect, index=${currentState.currentChallengeIndex}/${currentState.sessionBatchSize}")
 
         viewModelScope.launch(ioDispatcher) {
-            // 1. Update CharacterStats in Room database with adaptive priority weighting
+            // 1. Update Room CharacterStats with adaptive priority weighting
             val existingStat = profileRepository.getStatForCharacter(profile.id, target)
             val currentWeight = existingStat?.priorityWeight ?: 1.0f
             val updatedWeight = kochMethodManager.calculateUpdatedWeight(currentWeight, wasCorrect = isCorrect)
@@ -190,51 +266,69 @@ class TrainViewModel(
                 priorityWeight = updatedWeight
             )
             profileRepository.saveCharacterStat(newStat)
-            Log.d(TAG, "Updated CharacterStats for '$target': weight=$updatedWeight, correct=${newStat.correctCount}, incorrect=${newStat.incorrectCount}")
+
+            // Update session-level deprivation count
+            val upperTarget = target.uppercase()
+            val prevSessionAttempts = sessionCharacterAttempts[upperTarget] ?: 0
+            sessionCharacterAttempts[upperTarget] = prevSessionAttempts + 1
 
             // 2. Evaluate session accuracy
             val newTotalAttempts = currentState.sessionTotalAttempts + 1
             val newCorrectAttempts = currentState.sessionCorrectAttempts + (if (isCorrect) 1 else 0)
             val newAccuracy = (newCorrectAttempts.toFloat() / newTotalAttempts) * 100.0f
+            val isBatchFinished = currentState.currentChallengeIndex >= currentState.sessionBatchSize
 
-            // 3. Check for Koch level promotion threshold (>= 90% accuracy over minAttempts)
+            // 3. Evaluate v1.7 Koch level advancement on the latest introduced character
             val currentLevel = currentState.activeKochLevel
-            val canAdvance = currentLevel < kochMethodManager.maxLevel &&
-                    newTotalAttempts >= minAttemptsForLevelUp &&
-                    newAccuracy >= ACCURACY_THRESHOLD_PERCENT
+            val latestCharForLevel = kochMethodManager.getLatestCharacterForLevel(currentLevel)
+            val latestStat = profileRepository.getStatForCharacter(profile.id, latestCharForLevel)
+            val advancement = kochMethodManager.evaluateAdvancement(currentLevel, latestStat)
 
-            if (canAdvance) {
-                val nextLevel = min(currentLevel + 1, kochMethodManager.maxLevel)
-                val updatedProfile = profile.copy(currentKochLevel = nextLevel)
+            val updatedMastered = loadMasteredCharacters(profile.id)
+
+            var effectiveLevel = currentLevel
+            var activePool = currentState.availableCharacters
+            var levelUpMsg: String? = null
+
+            if (advancement != null) {
+                effectiveLevel = advancement.newLevel
+                val updatedProfile = profile.copy(currentKochLevel = effectiveLevel)
                 profileRepository.updateProfile(updatedProfile)
+                activePool = kochMethodManager.getCharactersForLevel(effectiveLevel)
+                levelUpMsg = advancement.message
+                Log.d(TAG, "Koch advancement achieved! ${advancement.message}")
+            }
 
-                val newPool = kochMethodManager.getCharactersForLevel(nextLevel)
-                val newlyUnlockedChar = newPool.lastOrNull() ?: ""
-                val nextTarget = pickNextTarget(profile.id, nextLevel)
-
-                Log.d(TAG, "Koch level advanced to $nextLevel! Accuracy: $newAccuracy%, Unlocked: '$newlyUnlockedChar', Next Target: '$nextTarget'")
-
+            if (isBatchFinished) {
+                // Halt at completion summary screen
                 _uiState.update {
                     it.copy(
-                        activeProfile = updatedProfile,
-                        activeKochLevel = nextLevel,
-                        availableCharacters = newPool,
-                        targetCharacter = nextTarget,
-                        sessionTotalAttempts = 0,
-                        sessionCorrectAttempts = 0,
-                        sessionAccuracy = 0.0f,
+                        activeProfile = if (advancement != null) profile.copy(currentKochLevel = effectiveLevel) else profile,
+                        activeKochLevel = effectiveLevel,
+                        availableCharacters = activePool,
+                        isSessionActive = false,
+                        isSessionFinished = true,
+                        sessionTotalAttempts = newTotalAttempts,
+                        sessionCorrectAttempts = newCorrectAttempts,
+                        sessionAccuracy = newAccuracy,
                         lastGuessedCharacter = guessedCharacter,
                         lastGuessWasCorrect = isCorrect,
                         feedbackMessage = if (isCorrect) "Correct! Target was '$target'" else "Incorrect. Target was '$target', you guessed '$guessedCharacter'",
-                        levelUpMessage = "Promoted to Level $nextLevel! New character '$newlyUnlockedChar' unlocked!",
+                        levelUpMessage = levelUpMsg ?: currentState.levelUpMessage,
+                        masteredCharacters = updatedMastered,
+                        sessionCharacterAttempts = sessionCharacterAttempts.toMap(),
                         isReplayTone = false
                     )
                 }
             } else {
-                val nextTarget = pickNextTarget(profile.id, currentLevel)
-
+                // Pick next challenge using v1.7 dynamic priority weighting
+                val nextTarget = pickNextTarget(profile.id, effectiveLevel)
                 _uiState.update {
                     it.copy(
+                        activeProfile = if (advancement != null) profile.copy(currentKochLevel = effectiveLevel) else profile,
+                        activeKochLevel = effectiveLevel,
+                        availableCharacters = activePool,
+                        currentChallengeIndex = currentState.currentChallengeIndex + 1,
                         targetCharacter = nextTarget,
                         sessionTotalAttempts = newTotalAttempts,
                         sessionCorrectAttempts = newCorrectAttempts,
@@ -242,8 +336,10 @@ class TrainViewModel(
                         lastGuessedCharacter = guessedCharacter,
                         lastGuessWasCorrect = isCorrect,
                         feedbackMessage = if (isCorrect) "Correct! Target was '$target'" else "Incorrect. Target was '$target', you guessed '$guessedCharacter'",
-                        levelUpMessage = null,
-                        isReplayTone = if (isCorrect) false else true
+                        levelUpMessage = levelUpMsg ?: currentState.levelUpMessage,
+                        masteredCharacters = updatedMastered,
+                        sessionCharacterAttempts = sessionCharacterAttempts.toMap(),
+                        isReplayTone = false
                     )
                 }
             }
@@ -251,13 +347,17 @@ class TrainViewModel(
     }
 
     /**
-     * Samples the next target character using fitness/roulette-wheel weighting from Room stats.
+     * Samples the next target character using v1.7 roulette-wheel weighting from Room global stats and session deprivation.
      */
     private suspend fun pickNextTarget(profileId: Long, level: Int): String {
         val pool = kochMethodManager.getCharactersForLevel(level)
-        val stats = profileRepository.getWeightedStatsForProfile(profileId)
-        val weightsMap = stats.associate { it.character to it.priorityWeight }
-        return kochMethodManager.getWeightedRandomCharacter(pool, weightsMap)
+        val statsList = profileRepository.getStatsForProfile(profileId)
+        val statsMap = statsList.associateBy { it.character.uppercase() }
+        return kochMethodManager.getNextChallenge(
+            pool = pool,
+            globalStats = statsMap,
+            sessionAttempts = sessionCharacterAttempts
+        )
     }
 
     /**
@@ -267,9 +367,11 @@ class TrainViewModel(
         val profile = _uiState.value.activeProfile ?: return
         viewModelScope.launch(ioDispatcher) {
             val level = _uiState.value.activeKochLevel
+            sessionCharacterAttempts.clear()
             val nextTarget = pickNextTarget(profile.id, level)
             _uiState.update {
                 it.copy(
+                    currentChallengeIndex = if (it.isSessionActive) 1 else 0,
                     sessionTotalAttempts = 0,
                     sessionCorrectAttempts = 0,
                     sessionAccuracy = 0.0f,
@@ -278,6 +380,7 @@ class TrainViewModel(
                     feedbackMessage = null,
                     levelUpMessage = null,
                     targetCharacter = nextTarget,
+                    sessionCharacterAttempts = emptyMap(),
                     isReplayTone = false
                 )
             }

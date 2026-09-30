@@ -1,4 +1,4 @@
-# Android Morse Trainer (AMT)
+# M7KQX - CW Bootcamp
 
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0+-7F52FF.svg?style=flat&logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Platform-Android_8.0+_(API_24+)-3DDC84.svg?style=flat&logo=android&logoColor=white)](https://developer.android.com)
@@ -7,7 +7,7 @@
 [![Room](https://img.shields.io/badge/Database-Room_KSP-orange.svg?style=flat)](https://developer.android.com/training/data-storage/room)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg?style=flat)](LICENSE)
 
-**Android Morse Trainer (AMT)** is an open-source, high-performance Android application engineered for amateur radio (ham radio) operators, commercial telegraphers, and Morse code enthusiasts. Built with **Jetpack Compose**, **Material 3**, and an ultra-low-latency **Digital Signal Processing (DSP)** engine, AMT supports both **receiving** (ear training) and **sending** (hardware keying practice) using standard international CW specifications.
+**M7KQX - CW Bootcamp** is an open-source, high-performance Android application engineered for amateur radio (ham radio) operators, commercial telegraphers, and Morse code enthusiasts. Built with **Jetpack Compose**, **Material 3**, and an ultra-low-latency **Digital Signal Processing (DSP)** engine, CW Bootcamp supports both **receiving** (ear training) and **sending** (hardware keying practice) using standard international CW specifications.
 
 ---
 
@@ -35,7 +35,7 @@
 
 ## Overview
 
-Traditional Morse trainers focus almost exclusively on audio playback, leaving operators without automated feedback when practicing sending with physical equipment. **Android Morse Trainer** bridges this gap:
+Traditional Morse trainers focus almost exclusively on audio playback, leaving operators without automated feedback when practicing sending with physical equipment. **M7KQX - CW Bootcamp** bridges this gap:
 
 - **Ears:** Train your copy speed using the proven **Koch method**, starting with full-speed characters (e.g. 20 WPM) and expanding your character pool as your accuracy reaches 90%.
 - **Hands:** Plug in or place your microphone next to your CW keyer, straight key, bug, or transceiver sidetone. The real-time Goertzel DSP analyzes your keying, verifies your timing against live challenges, and alerts you to common mistakes (such as improper element or character spacing).

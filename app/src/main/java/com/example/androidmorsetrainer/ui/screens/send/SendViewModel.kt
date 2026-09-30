@@ -16,6 +16,7 @@ import com.example.androidmorsetrainer.morse.KochMethodManager
 import com.example.androidmorsetrainer.morse.MorseConstants
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,13 +36,15 @@ class SendViewModel(
     decoder: CwDecoder? = null,
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    val minAttemptsForLevelUp: Int = DEFAULT_MIN_ATTEMPTS
+    val sessionBatchSize: Int = DEFAULT_BATCH_SIZE
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "SendViewModel"
-        const val DEFAULT_MIN_ATTEMPTS = 10
-        const val ACCURACY_THRESHOLD_PERCENT = 90.0f
+        const val DEFAULT_DRILL_LENGTH = 20
+        const val DEFAULT_BATCH_SIZE = DEFAULT_DRILL_LENGTH
+        const val DEFAULT_MIN_ATTEMPTS = 5
+        const val FEEDBACK_HOLD_MS = 750L
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
@@ -62,20 +65,32 @@ class SendViewModel(
             hasRecordPermission = dspManager.hasRecordPermission(),
             targetFrequencyHz = dspManager.targetFrequencyHz,
             detectionThreshold = dspManager.squelchThreshold,
-            squelchLevel = MorseDSPManager.magnitudeToSquelchLevel(dspManager.squelchThreshold)
+            squelchLevel = MorseDSPManager.magnitudeToSquelchLevel(dspManager.squelchThreshold),
+            selectedDrillLength = sessionBatchSize,
+            sessionBatchSize = sessionBatchSize
         )
     )
     val uiState: StateFlow<SendUiState> = _uiState.asStateFlow()
+
+    private val sessionCharacterAttempts = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     private val _squelchLevel = MutableStateFlow(
         MorseDSPManager.magnitudeToSquelchLevel(dspManager.squelchThreshold)
     )
     val squelchLevel: StateFlow<Float> = _squelchLevel.asStateFlow()
 
+    @Volatile
+    private var isEvaluating: Boolean = false
+
     init {
         observeDspState()
         observeToneEvents()
         observeDecoder()
+        val hasPerm = dspManager.hasRecordPermission()
+        _uiState.update { it.copy(hasRecordPermission = hasPerm) }
+        if (hasPerm) {
+            dspManager.startListening()
+        }
     }
 
     private fun observeDspState() {
@@ -132,16 +147,28 @@ class SendViewModel(
     }
 
     /**
-     * Sets or updates the active profile and prepares the initial Koch challenge.
+     * Identifies characters where historical accuracy in Room meets proficiency (>= 5 attempts and >= 70%).
+     * Visual Morse dotreps are hidden for these mastered characters.
+     */
+    private suspend fun loadMasteredCharacters(profileId: Long): Set<String> {
+        val stats = profileRepository.getStatsForProfile(profileId)
+        return stats.filter { stat ->
+            kochMethodManager.isProficient(stat.correctCount, stat.incorrectCount)
+        }.map { it.character.uppercase() }.toSet()
+    }
+
+    /**
+     * Sets or updates the active profile and prepares the Pre-Drill Setup / Calibration state.
      */
     fun setActiveProfile(profile: UserProfile?) {
         if (profile == null) {
+            sessionCharacterAttempts.clear()
             _uiState.update { SendUiState() }
             return
         }
 
         val currentProfile = _uiState.value.activeProfile
-        if (currentProfile?.id == profile.id && currentProfile.currentKochLevel == profile.currentKochLevel && _uiState.value.targetCharacter.isNotEmpty()) {
+        if (currentProfile?.id == profile.id && currentProfile.currentKochLevel == profile.currentKochLevel && _uiState.value.isSessionActive) {
             _uiState.update { it.copy(activeProfile = profile) }
             return
         }
@@ -152,6 +179,8 @@ class SendViewModel(
         viewModelScope.launch(ioDispatcher) {
             val initialTarget = pickNextTarget(profile.id, level)
             val pattern = MorseConstants.MORSE_MAP[initialTarget] ?: ""
+            val mastered = loadMasteredCharacters(profile.id)
+            sessionCharacterAttempts.clear()
 
             Log.d(TAG, "Hardware Keying initialized for ${profile.name} at Level $level, target='$initialTarget'")
 
@@ -162,13 +191,21 @@ class SendViewModel(
                     availableCharacters = pool,
                     targetCharacter = initialTarget,
                     targetMorsePattern = pattern,
+                    showStartLessonDialog = false,
+                    isSessionActive = false,
+                    isSessionFinished = false,
+                    currentChallengeIndex = 0,
                     sessionTotalAttempts = 0,
                     sessionCorrectAttempts = 0,
                     sessionAccuracy = 0.0f,
+                    verificationStatus = VerificationStatus.IDLE,
+                    lastEvaluatedChar = null,
                     lastKeyedCharacter = null,
                     lastKeyWasCorrect = null,
                     feedbackMessage = null,
                     levelUpMessage = null,
+                    masteredCharacters = mastered,
+                    sessionCharacterAttempts = emptyMap(),
                     liveDecodedText = "",
                     currentMorseSymbol = ""
                 )
@@ -177,16 +214,116 @@ class SendViewModel(
     }
 
     /**
+     * Updates the user-selected drill length from the Pre-Drill Setup screen (e.g. 20, 50, 100).
+     */
+    fun setDrillLength(length: Int) {
+        val clamped = length.coerceIn(5, 500)
+        _uiState.update {
+            it.copy(
+                selectedDrillLength = clamped,
+                sessionBatchSize = clamped
+            )
+        }
+    }
+
+    /**
+     * Starts a structured training lesson batch with the chosen drill length.
+     */
+    fun startLesson(drillLength: Int? = null) {
+        val currentState = _uiState.value
+        val profile = currentState.activeProfile ?: return
+        val batchSize = drillLength ?: currentState.selectedDrillLength
+
+        viewModelScope.launch(ioDispatcher) {
+            sessionCharacterAttempts.clear()
+            val initialTarget = pickNextTarget(profile.id, currentState.activeKochLevel)
+            val pattern = MorseConstants.MORSE_MAP[initialTarget] ?: ""
+            val mastered = loadMasteredCharacters(profile.id)
+
+            activeDecoder.clear()
+            isEvaluating = false
+
+            _uiState.update {
+                it.copy(
+                    selectedDrillLength = batchSize,
+                    sessionBatchSize = batchSize,
+                    showStartLessonDialog = false,
+                    isSessionActive = true,
+                    isSessionFinished = false,
+                    currentChallengeIndex = 1,
+                    sessionTotalAttempts = 0,
+                    sessionCorrectAttempts = 0,
+                    sessionAccuracy = 0.0f,
+                    targetCharacter = initialTarget,
+                    targetMorsePattern = pattern,
+                    verificationStatus = VerificationStatus.IDLE,
+                    lastEvaluatedChar = null,
+                    masteredCharacters = mastered,
+                    sessionCharacterAttempts = emptyMap(),
+                    feedbackMessage = null,
+                    levelUpMessage = null,
+                    liveDecodedText = "",
+                    currentMorseSymbol = ""
+                )
+            }
+
+            if (dspManager.hasRecordPermission()) {
+                dspManager.startListening()
+            }
+        }
+    }
+
+    /**
+     * Navigates back to the Pre-Drill Setup & Calibration view from a summary screen.
+     */
+    fun returnToSetup() {
+        sessionCharacterAttempts.clear()
+        activeDecoder.clear()
+        _uiState.update {
+            it.copy(
+                isSessionActive = false,
+                isSessionFinished = false,
+                currentChallengeIndex = 0,
+                feedbackMessage = null,
+                levelUpMessage = null,
+                verificationStatus = VerificationStatus.IDLE
+            )
+        }
+        if (dspManager.hasRecordPermission()) {
+            dspManager.startListening()
+        }
+    }
+
+    /**
+     * Dismisses the Start Lesson dialog (legacy compatibility).
+     */
+    fun dismissStartLessonDialog() {
+        _uiState.update { it.copy(showStartLessonDialog = false) }
+    }
+
+    /**
+     * Re-opens the Start Lesson dialog (legacy compatibility).
+     */
+    fun openStartLessonDialog() {
+        _uiState.update { it.copy(showStartLessonDialog = true) }
+    }
+
+    /**
      * Verifies a keyed character from CwDecoder against the active Koch challenge.
+     * Displays a momentary "Correct" or "Incorrect" indicator in the main challenge window
+     * before rendering the next character challenge or halting at completion.
      */
     fun verifyKeyedCharacter(keyedChar: String) {
         val currentState = _uiState.value
         val profile = currentState.activeProfile ?: return
         val target = currentState.targetCharacter
-        if (target.isEmpty()) return
+        if (target.isEmpty() || !currentState.isSessionActive || currentState.isSessionFinished || isEvaluating) return
 
         val isCorrect = keyedChar.equals(target, ignoreCase = true)
-        Log.d(TAG, "Keyed: '$keyedChar', Target: '$target', isCorrect=$isCorrect")
+        Log.d(TAG, "Keyed: '$keyedChar', Target: '$target', isCorrect=$isCorrect, index=${currentState.currentChallengeIndex}/${currentState.sessionBatchSize}")
+
+        isEvaluating = true
+        activeDecoder.clear()
 
         viewModelScope.launch(ioDispatcher) {
             // 1. Update Room CharacterStats with adaptive priority weighting
@@ -207,104 +344,144 @@ class SendViewModel(
             )
             profileRepository.saveCharacterStat(newStat)
 
+            // Update session-level deprivation count
+            val upperTarget = target.uppercase()
+            val prevSessionAttempts = sessionCharacterAttempts[upperTarget] ?: 0
+            sessionCharacterAttempts[upperTarget] = prevSessionAttempts + 1
+
             // 2. Compute session metrics
             val newTotalAttempts = currentState.sessionTotalAttempts + 1
             val newCorrectAttempts = currentState.sessionCorrectAttempts + (if (isCorrect) 1 else 0)
             val newAccuracy = (newCorrectAttempts.toFloat() / newTotalAttempts) * 100.0f
+            val isBatchFinished = currentState.currentChallengeIndex >= currentState.sessionBatchSize
 
-            if (isCorrect) {
-                // Clear decoder buffer immediately on correct match
-                activeDecoder.clear()
+            // 3. Evaluate v1.7 Koch level advancement on the latest introduced character
+            val currentLevel = currentState.activeKochLevel
+            val latestCharForLevel = kochMethodManager.getLatestCharacterForLevel(currentLevel)
+            val latestStat = profileRepository.getStatForCharacter(profile.id, latestCharForLevel)
+            val advancement = kochMethodManager.evaluateAdvancement(currentLevel, latestStat)
 
-                // Check Koch promotion criteria (>= 90% accuracy over minimum attempts)
-                val currentLevel = currentState.activeKochLevel
-                val canAdvance = currentLevel < kochMethodManager.maxLevel &&
-                        newTotalAttempts >= minAttemptsForLevelUp &&
-                        newAccuracy >= ACCURACY_THRESHOLD_PERCENT
+            val updatedMastered = loadMasteredCharacters(profile.id)
 
-                if (canAdvance) {
-                    val nextLevel = min(currentLevel + 1, kochMethodManager.maxLevel)
-                    val updatedProfile = profile.copy(currentKochLevel = nextLevel)
-                    profileRepository.updateProfile(updatedProfile)
+            var effectiveLevel = currentLevel
+            var activePool = currentState.availableCharacters
+            var levelUpMsg: String? = null
 
-                    val newPool = kochMethodManager.getCharactersForLevel(nextLevel)
-                    val newlyUnlocked = newPool.lastOrNull() ?: ""
-                    val nextTarget = pickNextTarget(profile.id, nextLevel)
+            if (advancement != null) {
+                effectiveLevel = advancement.newLevel
+                val updatedProfile = profile.copy(currentKochLevel = effectiveLevel)
+                profileRepository.updateProfile(updatedProfile)
+                activePool = kochMethodManager.getCharactersForLevel(effectiveLevel)
+                levelUpMsg = advancement.message
+                Log.d(TAG, "Hardware Keying Koch advancement achieved! ${advancement.message}")
+            }
 
-                    _uiState.update {
-                        it.copy(
-                            activeProfile = updatedProfile,
-                            activeKochLevel = nextLevel,
-                            availableCharacters = newPool,
-                            targetCharacter = nextTarget,
-                            targetMorsePattern = MorseConstants.MORSE_MAP[nextTarget] ?: "",
-                            sessionTotalAttempts = 0,
-                            sessionCorrectAttempts = 0,
-                            sessionAccuracy = 0.0f,
-                            lastKeyedCharacter = keyedChar,
-                            lastKeyWasCorrect = true,
-                            feedbackMessage = "Perfect! Target was '$target'",
-                            levelUpMessage = "Promoted to Level $nextLevel! '$newlyUnlocked' unlocked!",
-                            liveDecodedText = ""
-                        )
-                    }
-                } else {
-                    val nextTarget = pickNextTarget(profile.id, currentLevel)
-                    _uiState.update {
-                        it.copy(
-                            targetCharacter = nextTarget,
-                            targetMorsePattern = MorseConstants.MORSE_MAP[nextTarget] ?: "",
-                            sessionTotalAttempts = newTotalAttempts,
-                            sessionCorrectAttempts = newCorrectAttempts,
-                            sessionAccuracy = newAccuracy,
-                            lastKeyedCharacter = keyedChar,
-                            lastKeyWasCorrect = true,
-                            feedbackMessage = "Correct! Target '$target' sent cleanly.",
-                            levelUpMessage = null,
-                            liveDecodedText = ""
-                        )
-                    }
-                }
-            } else {
-                // Incorrect match: keep target active, give feedback
+            // 4. Render momentary verification status in the main challenge window
+            _uiState.update {
+                it.copy(
+                    verificationStatus = if (isCorrect) VerificationStatus.CORRECT else VerificationStatus.INCORRECT,
+                    lastEvaluatedChar = keyedChar,
+                    lastKeyedCharacter = keyedChar,
+                    lastKeyWasCorrect = isCorrect,
+                    sessionTotalAttempts = newTotalAttempts,
+                    sessionCorrectAttempts = newCorrectAttempts,
+                    sessionAccuracy = newAccuracy,
+                    masteredCharacters = updatedMastered,
+                    sessionCharacterAttempts = sessionCharacterAttempts.toMap(),
+                    feedbackMessage = if (isCorrect) "Correct! Target '$target' sent cleanly." else "Decoded '$keyedChar', expected '$target'."
+                )
+            }
+
+            // Hold visual feedback indicator before rendering next challenge
+            delay(FEEDBACK_HOLD_MS)
+
+            if (isBatchFinished) {
+                // Halt at completion state & release audio capture
+                dspManager.stopListening()
+
                 _uiState.update {
                     it.copy(
-                        sessionTotalAttempts = newTotalAttempts,
-                        sessionAccuracy = newAccuracy,
-                        lastKeyedCharacter = keyedChar,
-                        lastKeyWasCorrect = false,
-                        feedbackMessage = "Decoded '$keyedChar', expected '$target'. Key again!",
-                        levelUpMessage = null
+                        activeProfile = if (advancement != null) profile.copy(currentKochLevel = effectiveLevel) else profile,
+                        activeKochLevel = effectiveLevel,
+                        availableCharacters = activePool,
+                        verificationStatus = VerificationStatus.IDLE,
+                        isSessionActive = false,
+                        isSessionFinished = true,
+                        levelUpMessage = levelUpMsg ?: currentState.levelUpMessage,
+                        liveDecodedText = ""
+                    )
+                }
+            } else {
+                // Render next character challenge using v1.7 dynamic priority weighting
+                val nextTarget = pickNextTarget(profile.id, effectiveLevel)
+                val nextPattern = MorseConstants.MORSE_MAP[nextTarget] ?: ""
+
+                _uiState.update {
+                    it.copy(
+                        activeProfile = if (advancement != null) profile.copy(currentKochLevel = effectiveLevel) else profile,
+                        activeKochLevel = effectiveLevel,
+                        availableCharacters = activePool,
+                        currentChallengeIndex = currentState.currentChallengeIndex + 1,
+                        targetCharacter = nextTarget,
+                        targetMorsePattern = nextPattern,
+                        verificationStatus = VerificationStatus.IDLE,
+                        levelUpMessage = levelUpMsg ?: currentState.levelUpMessage,
+                        liveDecodedText = "",
+                        currentMorseSymbol = ""
                     )
                 }
             }
+
+            activeDecoder.clear()
+            isEvaluating = false
         }
     }
 
     private suspend fun pickNextTarget(profileId: Long, level: Int): String {
         val pool = kochMethodManager.getCharactersForLevel(level)
-        val stats = profileRepository.getWeightedStatsForProfile(profileId)
-        val weightsMap = stats.associate { it.character to it.priorityWeight }
-        return kochMethodManager.getWeightedRandomCharacter(pool, weightsMap)
+        val statsList = profileRepository.getStatsForProfile(profileId)
+        val statsMap = statsList.associateBy { it.character.uppercase() }
+        return kochMethodManager.getNextChallenge(
+            pool = pool,
+            globalStats = statsMap,
+            sessionAttempts = sessionCharacterAttempts
+        )
     }
 
     /**
      * Skips the current challenge and loads a new target from the current level pool.
      */
     fun skipChallenge() {
-        val profile = _uiState.value.activeProfile ?: return
+        val currentState = _uiState.value
+        val profile = currentState.activeProfile ?: return
+        if (!currentState.isSessionActive || currentState.isSessionFinished) return
+
         viewModelScope.launch(ioDispatcher) {
-            val nextTarget = pickNextTarget(profile.id, _uiState.value.activeKochLevel)
-            activeDecoder.clear()
-            _uiState.update {
-                it.copy(
-                    targetCharacter = nextTarget,
-                    targetMorsePattern = MorseConstants.MORSE_MAP[nextTarget] ?: "",
-                    feedbackMessage = null,
-                    lastKeyedCharacter = null,
-                    lastKeyWasCorrect = null,
-                    liveDecodedText = ""
-                )
+            val isBatchFinished = currentState.currentChallengeIndex >= currentState.sessionBatchSize
+            if (isBatchFinished) {
+                dspManager.stopListening()
+                _uiState.update {
+                    it.copy(
+                        isSessionActive = false,
+                        isSessionFinished = true,
+                        verificationStatus = VerificationStatus.IDLE
+                    )
+                }
+            } else {
+                val nextTarget = pickNextTarget(profile.id, currentState.activeKochLevel)
+                activeDecoder.clear()
+                _uiState.update {
+                    it.copy(
+                        currentChallengeIndex = currentState.currentChallengeIndex + 1,
+                        targetCharacter = nextTarget,
+                        targetMorsePattern = MorseConstants.MORSE_MAP[nextTarget] ?: "",
+                        feedbackMessage = null,
+                        lastKeyedCharacter = null,
+                        lastKeyWasCorrect = null,
+                        liveDecodedText = "",
+                        verificationStatus = VerificationStatus.IDLE
+                    )
+                }
             }
         }
     }
@@ -374,7 +551,7 @@ class SendViewModel(
      */
     fun onPermissionResult(isGranted: Boolean) {
         _uiState.update { it.copy(hasRecordPermission = isGranted) }
-        if (isGranted) {
+        if (isGranted && !_uiState.value.isSessionFinished) {
             startListening()
         }
     }

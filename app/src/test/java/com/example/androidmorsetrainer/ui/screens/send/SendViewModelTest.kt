@@ -24,6 +24,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -129,14 +130,10 @@ class SendViewModelTest {
     private lateinit var dspManager: FakeMorseDSPManager
     private lateinit var viewModel: SendViewModel
 
-    private val testProfile = UserProfile(
-        id = 1L,
-        name = "Operator",
-        currentKochLevel = 1
-    )
+    private lateinit var testProfile: UserProfile
 
     @Before
-    fun setUp() {
+    fun setUp() = runTest(testDispatcher) {
         Dispatchers.setMain(testDispatcher)
         profileRepository = FakeProfileRepository()
         kochMethodManager = KochMethodManager()
@@ -147,8 +144,11 @@ class SendViewModelTest {
             dspManager = dspManager,
             defaultDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
-            minAttemptsForLevelUp = 5
+            sessionBatchSize = 5
         )
+
+        val profileId = profileRepository.createProfile("Operator")
+        testProfile = profileRepository.getProfileById(profileId)!!
     }
 
     @After
@@ -162,6 +162,9 @@ class SendViewModelTest {
         assertTrue(state.hasRecordPermission)
         assertEquals(700.0, state.targetFrequencyHz, 0.001)
         assertNotNull(viewModel.squelchLevel.value)
+        assertFalse(state.isSessionActive)
+        assertFalse(state.isSessionFinished)
+        assertEquals(5, state.sessionBatchSize)
     }
 
     @Test
@@ -176,6 +179,36 @@ class SendViewModelTest {
         assertTrue(state.targetCharacter in listOf("K", "M"))
         assertTrue(state.targetMorsePattern.isNotEmpty())
         assertEquals(0, state.sessionTotalAttempts)
+        assertFalse(state.isSessionActive)
+        assertFalse(state.isSessionFinished)
+    }
+
+    @Test
+    fun setDrillLength_updatesSelectedLengthAndBatchSize() {
+        viewModel.setDrillLength(50)
+        assertEquals(50, viewModel.uiState.value.selectedDrillLength)
+        assertEquals(50, viewModel.uiState.value.sessionBatchSize)
+
+        viewModel.setDrillLength(100)
+        assertEquals(100, viewModel.uiState.value.selectedDrillLength)
+        assertEquals(100, viewModel.uiState.value.sessionBatchSize)
+    }
+
+    @Test
+    fun startLesson_activatesSessionAndStartsListening() = runTest {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        viewModel.startLesson(5)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.isSessionActive)
+        assertFalse(state.isSessionFinished)
+        assertEquals(1, state.currentChallengeIndex)
+        assertEquals(5, state.sessionBatchSize)
+        assertTrue(state.targetCharacter in listOf("K", "M"))
+        assertTrue(dspManager.isListeningStarted)
     }
 
     @Test
@@ -221,6 +254,8 @@ class SendViewModelTest {
     fun verifyKeyedCharacter_correctMatch_advancesAttemptsAndAccuracy() = runTest {
         viewModel.setActiveProfile(testProfile)
         advanceUntilIdle()
+        viewModel.startLesson(5)
+        advanceUntilIdle()
 
         val currentTarget = viewModel.uiState.value.targetCharacter
         assertTrue(currentTarget.isNotEmpty())
@@ -235,6 +270,7 @@ class SendViewModelTest {
         assertEquals(true, state.lastKeyWasCorrect)
         assertEquals(currentTarget, state.lastKeyedCharacter)
         assertTrue(state.liveDecodedText.isEmpty())
+        assertEquals(VerificationStatus.IDLE, state.verificationStatus)
 
         // Stat must be saved in database
         val stat = profileRepository.getStatForCharacter(testProfile.id, currentTarget)
@@ -243,8 +279,10 @@ class SendViewModelTest {
     }
 
     @Test
-    fun verifyKeyedCharacter_incorrectMatch_retainsTargetAndDecreasesAccuracy() = runTest {
+    fun verifyKeyedCharacter_incorrectMatch_recordsIncorrectAttemptAndDecreasesAccuracy() = runTest {
         viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+        viewModel.startLesson(5)
         advanceUntilIdle()
 
         val currentTarget = viewModel.uiState.value.targetCharacter
@@ -259,7 +297,6 @@ class SendViewModelTest {
         assertEquals(0.0f, state.sessionAccuracy, 0.001f)
         assertEquals(false, state.lastKeyWasCorrect)
         assertEquals(wrongChar, state.lastKeyedCharacter)
-        assertEquals(currentTarget, state.targetCharacter) // Target preserved for retry!
 
         val stat = profileRepository.getStatForCharacter(testProfile.id, currentTarget)
         assertNotNull(stat)
@@ -267,12 +304,26 @@ class SendViewModelTest {
     }
 
     @Test
-    fun verifyKeyedCharacter_promotesKochLevelAt90PercentAccuracy() = runTest {
+    fun verifyKeyedCharacter_completesBatchAndPromotesKochLevelOnLatestCharacterMastery() = runTest {
+        // v1.7 logic: Level 1 characters are "K" and "M". Latest introduced is "M".
+        // Promotion criteria: attempts >= 5 and accuracy >= 70.0% on latest character "M".
+        profileRepository.saveCharacterStat(
+            CharacterStats(
+                profileId = testProfile.id,
+                character = "M",
+                correctCount = 4,
+                incorrectCount = 0,
+                priorityWeight = 1.0f
+            )
+        )
+
         viewModel.setActiveProfile(testProfile)
         advanceUntilIdle()
+        viewModel.startLesson(5)
+        advanceUntilIdle()
 
-        // minAttemptsForLevelUp = 5. Send 5 correct answers.
-        repeat(5) {
+        // Key challenges correctly until latest character "M" reaches >= 5 attempts
+        while (viewModel.uiState.value.activeKochLevel == 1 && !viewModel.uiState.value.isSessionFinished) {
             val target = viewModel.uiState.value.targetCharacter
             viewModel.verifyKeyedCharacter(target)
             advanceUntilIdle()
@@ -283,17 +334,75 @@ class SendViewModelTest {
         assertTrue(state.availableCharacters.contains("R"))
         assertNotNull(state.levelUpMessage)
         assertTrue(state.levelUpMessage?.contains("Level 2") == true)
+
+        val updatedProfile = profileRepository.getProfileById(testProfile.id)
+        assertEquals(2, updatedProfile?.currentKochLevel)
     }
 
     @Test
-    fun skipChallenge_loadsNewTargetFromPool() = runTest {
+    fun returnToSetup_resetsSessionAndStartsListeningForCalibration() = runTest {
         viewModel.setActiveProfile(testProfile)
         advanceUntilIdle()
+        viewModel.startLesson(1)
+        advanceUntilIdle()
+
+        viewModel.verifyKeyedCharacter(viewModel.uiState.value.targetCharacter)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isSessionFinished)
+
+        viewModel.returnToSetup()
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.isSessionActive)
+        assertFalse(state.isSessionFinished)
+        assertEquals(0, state.currentChallengeIndex)
+        assertTrue(dspManager.isListeningStarted)
+    }
+
+    @Test
+    fun adaptiveVisualHints_hidesHintWhenCharacterMastered() = runTest {
+        // v1.7 proficiency: attempts >= 5 and accuracy >= 70.0%
+        profileRepository.saveCharacterStat(
+            CharacterStats(
+                profileId = testProfile.id,
+                character = "K",
+                correctCount = 5,
+                incorrectCount = 0,
+                priorityWeight = 1.0f
+            )
+        )
+
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.masteredCharacters.contains("K"))
+        assertFalse(state.masteredCharacters.contains("M"))
+
+        val target = state.targetCharacter
+        if (target == "K") {
+            assertFalse(state.showTargetHint)
+        } else {
+            assertTrue(state.showTargetHint)
+        }
+    }
+
+    @Test
+    fun skipChallenge_advancesChallengeInBatch() = runTest {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+        viewModel.startLesson(5)
+        advanceUntilIdle()
+
+        assertEquals(1, viewModel.uiState.value.currentChallengeIndex)
 
         viewModel.skipChallenge()
         advanceUntilIdle()
 
         val state = viewModel.uiState.value
+        assertEquals(2, state.currentChallengeIndex)
         assertTrue(state.targetCharacter in listOf("K", "M"))
         assertTrue(state.targetMorsePattern.isNotEmpty())
     }

@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Android(Morse Trainer"
+rootProject.name = "M7KQX - CW Bootcamp"
 include(":app")

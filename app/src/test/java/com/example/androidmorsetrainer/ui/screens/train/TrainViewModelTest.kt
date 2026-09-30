@@ -85,6 +85,9 @@ class FakeMorseAudioGenerator : MorseAudioGenerator() {
     override suspend fun playCharacter(character: String) {
         playedCharacters.add(character)
     }
+
+    override fun stop() {}
+    override fun release() {}
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -108,7 +111,7 @@ class TrainViewModelTest {
             kochMethodManager = kochMethodManager,
             audioGenerator = fakeAudioGenerator,
             ioDispatcher = testDispatcher,
-            minAttemptsForLevelUp = 10
+            defaultDrillLength = 20
         )
 
         val profileId = fakeRepository.createProfile("Test Trainee")
@@ -130,10 +133,13 @@ class TrainViewModelTest {
         assertEquals(0, state.sessionTotalAttempts)
         assertEquals(0, state.sessionCorrectAttempts)
         assertEquals(0.0f, state.sessionAccuracy, 0.001f)
+        assertFalse(state.isSessionActive)
+        assertFalse(state.isSessionFinished)
+        assertEquals(20, state.selectedDrillLength)
     }
 
     @Test
-    fun setActiveProfile_loadsLevelAndAvailableCharacters() = runTest(testDispatcher) {
+    fun setActiveProfile_loadsLevelAndEntersSetupMode() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
         advanceUntilIdle()
 
@@ -142,46 +148,51 @@ class TrainViewModelTest {
         assertEquals(testProfile.id, state.activeProfile?.id)
         assertEquals(1, state.activeKochLevel)
         assertEquals(listOf("K", "M"), state.availableCharacters)
-        assertTrue(state.showStartLessonDialog)
+        assertFalse(state.isSessionActive)
+        assertFalse(state.isSessionFinished)
         assertEquals("", state.targetCharacter)
         assertEquals(0, state.sessionTotalAttempts)
 
-        // Starting lesson confirms and picks first target
-        viewModel.startLesson()
+        // Starting drill enters active session and selects first challenge
+        viewModel.startLesson(20)
         advanceUntilIdle()
 
         val startedState = viewModel.uiState.value
-        assertFalse(startedState.showStartLessonDialog)
+        assertTrue(startedState.isSessionActive)
+        assertFalse(startedState.isSessionFinished)
+        assertEquals(1, startedState.currentChallengeIndex)
+        assertEquals(20, startedState.sessionBatchSize)
         assertTrue(startedState.targetCharacter in listOf("K", "M"))
         assertFalse(startedState.isReplayTone)
     }
 
     @Test
-    fun startLessonDialog_preventsTargetAndAudioPlaybackUntilConfirmed() = runTest(testDispatcher) {
+    fun preDrillSetup_preventsTargetAndAudioPlaybackUntilStarted() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
         advanceUntilIdle()
 
-        // Prior to confirmation: no target character and dialog is showing
+        // Prior to starting: no target character, session not active
         val state = viewModel.uiState.value
-        assertTrue(state.showStartLessonDialog)
+        assertFalse(state.isSessionActive)
         assertEquals("", state.targetCharacter)
         assertFalse(state.hasTarget)
 
-        // Attempting to play tone before confirmation does NOT engage the audio engine
+        // Attempting to play tone before starting does NOT engage audio generator
         viewModel.playTone()
         advanceUntilIdle()
         assertTrue(fakeAudioGenerator.playedCharacters.isEmpty())
 
-        // User confirms Start Lesson
-        viewModel.startLesson()
+        // User starts drill
+        viewModel.startLesson(50)
         advanceUntilIdle()
 
         val confirmedState = viewModel.uiState.value
-        assertFalse(confirmedState.showStartLessonDialog)
+        assertTrue(confirmedState.isSessionActive)
+        assertEquals(50, confirmedState.sessionBatchSize)
         assertTrue(confirmedState.targetCharacter.isNotEmpty())
         assertTrue(confirmedState.hasTarget)
 
-        // Now audio engine can be engaged
+        // Now audio generator can be engaged
         viewModel.playTone()
         advanceUntilIdle()
         assertEquals(1, fakeAudioGenerator.playedCharacters.size)
@@ -189,9 +200,21 @@ class TrainViewModelTest {
     }
 
     @Test
+    fun setDrillLength_updatesSelectedLengthAndBatchSize() = runTest(testDispatcher) {
+        viewModel.setDrillLength(100)
+        assertEquals(100, viewModel.uiState.value.selectedDrillLength)
+        assertEquals(100, viewModel.uiState.value.sessionBatchSize)
+
+        viewModel.setDrillLength(50)
+        assertEquals(50, viewModel.uiState.value.selectedDrillLength)
+        assertEquals(50, viewModel.uiState.value.sessionBatchSize)
+    }
+
+    @Test
     fun playReplayButtonState_togglesOnPlayAndResetsOnCorrectGuess() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
-        viewModel.startLesson()
+        advanceUntilIdle()
+        viewModel.startLesson(20)
         advanceUntilIdle()
 
         // New challenge starts with "Play Tone" state (isReplayTone = false)
@@ -199,13 +222,6 @@ class TrainViewModelTest {
 
         // Playing tone switches state to "Replay Tone" (isReplayTone = true)
         viewModel.playTone()
-        advanceUntilIdle()
-        assertTrue(viewModel.uiState.value.isReplayTone)
-
-        // Incorrect guess keeps or sets state to "Replay Tone"
-        val target = viewModel.uiState.value.targetCharacter
-        val wrongGuess = if (target == "K") "M" else "K"
-        viewModel.submitGuess(wrongGuess)
         advanceUntilIdle()
         assertTrue(viewModel.uiState.value.isReplayTone)
 
@@ -219,7 +235,8 @@ class TrainViewModelTest {
     @Test
     fun playTone_triggersAudioGeneratorOnBackgroundThread() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
-        viewModel.startLesson()
+        advanceUntilIdle()
+        viewModel.startLesson(20)
         advanceUntilIdle()
 
         val currentTarget = viewModel.uiState.value.targetCharacter
@@ -235,7 +252,8 @@ class TrainViewModelTest {
     @Test
     fun submitGuess_correctGuessUpdatesRoomStatsAndAccuracy() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
-        viewModel.startLesson()
+        advanceUntilIdle()
+        viewModel.startLesson(20)
         advanceUntilIdle()
 
         val target = viewModel.uiState.value.targetCharacter
@@ -253,14 +271,14 @@ class TrainViewModelTest {
         assertNotNull(stat)
         assertEquals(1, stat?.correctCount)
         assertEquals(0, stat?.incorrectCount)
-        // Correct guess reduces priority weight (or stays at minWeight 1.0f)
         assertTrue(stat!!.priorityWeight <= 1.0f)
     }
 
     @Test
     fun submitGuess_incorrectGuessUpdatesRoomStatsAndAccuracy() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
-        viewModel.startLesson()
+        advanceUntilIdle()
+        viewModel.startLesson(20)
         advanceUntilIdle()
 
         val target = viewModel.uiState.value.targetCharacter
@@ -280,90 +298,147 @@ class TrainViewModelTest {
         assertNotNull(stat)
         assertEquals(0, stat?.correctCount)
         assertEquals(1, stat?.incorrectCount)
-        // Incorrect guess increases priority weight > 1.0f
         assertTrue(stat!!.priorityWeight > 1.0f)
     }
 
     @Test
-    fun levelProgression_reaches90PercentAccuracyThreshold_advancesKochLevelAndUpdatesProfileInRoom() = runTest(testDispatcher) {
+    fun levelProgression_latestCharacterMeetsV17Threshold_advancesKochLevel() = runTest(testDispatcher) {
+        // v1.7 logic: Level 1 characters are "K" and "M". Latest introduced is "M".
+        // Promotion criteria: attempts >= 5 and accuracy >= 70.0% on latest character "M".
+        fakeRepository.saveCharacterStat(
+            CharacterStats(
+                profileId = testProfile.id,
+                character = "M",
+                correctCount = 4,
+                incorrectCount = 0,
+                priorityWeight = 1.0f
+            )
+        )
+
         viewModel.setActiveProfile(testProfile)
-        viewModel.startLesson()
+        advanceUntilIdle()
+        viewModel.startLesson(20)
         advanceUntilIdle()
 
         assertEquals(1, viewModel.uiState.value.activeKochLevel)
 
-        // Make 9 correct guesses and 1 incorrect guess -> 9 / 10 = 90.0% accuracy
-        for (i in 1..9) {
+        // Answer challenges correctly until latest character "M" is evaluated
+        while (viewModel.uiState.value.activeKochLevel == 1 && !viewModel.uiState.value.isSessionFinished) {
             val target = viewModel.uiState.value.targetCharacter
             viewModel.submitGuess(target)
             advanceUntilIdle()
         }
 
-        // 9 attempts, all correct: total = 9, correct = 9 (100%), not yet at 10 min attempts
-        assertEquals(9, viewModel.uiState.value.sessionTotalAttempts)
-        assertEquals(1, viewModel.uiState.value.activeKochLevel)
-
-        // 10th attempt: incorrect guess -> total = 10, correct = 9 -> exactly 90.0% accuracy!
-        val target10 = viewModel.uiState.value.targetCharacter
-        val wrongGuess = if (target10 == "K") "M" else "K"
-        viewModel.submitGuess(wrongGuess)
-        advanceUntilIdle()
-
         val state = viewModel.uiState.value
-        // Should have seamlessly leveled up to Koch Level 2!
+        // Latest character "M" now reached >= 5 attempts, >= 70% accuracy -> advances to Level 2!
         assertEquals(2, state.activeKochLevel)
-        assertEquals(listOf("K", "M", "R"), state.availableCharacters)
+        assertTrue(state.availableCharacters.contains("R"))
         assertNotNull(state.levelUpMessage)
         assertTrue(state.levelUpMessage!!.contains("Level 2"))
-        assertTrue(state.levelUpMessage!!.contains("R"))
 
-        // Session score should reset for the new level
-        assertEquals(0, state.sessionTotalAttempts)
-        assertEquals(0, state.sessionCorrectAttempts)
-        assertEquals(0.0f, state.sessionAccuracy, 0.001f)
-
-        // Profile in database should be updated to Level 2
+        // Profile in database is updated
         val updatedProfile = fakeRepository.getProfileById(testProfile.id)
-        assertNotNull(updatedProfile)
         assertEquals(2, updatedProfile?.currentKochLevel)
     }
 
     @Test
-    fun levelProgression_belowThresholdDoesNotAdvance() = runTest(testDispatcher) {
+    fun levelProgression_belowV17ThresholdDoesNotAdvance() = runTest(testDispatcher) {
+        // Latest character "M" has 5 attempts, but only 2 correct (40% accuracy < 70%)
+        fakeRepository.saveCharacterStat(
+            CharacterStats(
+                profileId = testProfile.id,
+                character = "M",
+                correctCount = 2,
+                incorrectCount = 3,
+                priorityWeight = 1.0f
+            )
+        )
+        // Earlier character "K" has 100% accuracy, but advancement only checks latest "M"
+        fakeRepository.saveCharacterStat(
+            CharacterStats(
+                profileId = testProfile.id,
+                character = "K",
+                correctCount = 5,
+                incorrectCount = 0,
+                priorityWeight = 1.0f
+            )
+        )
+
         viewModel.setActiveProfile(testProfile)
-        viewModel.startLesson()
+        advanceUntilIdle()
+        viewModel.startLesson(20)
         advanceUntilIdle()
 
-        // Make 8 correct guesses and 2 incorrect guesses -> 8 / 10 = 80.0% accuracy (< 90%)
-        for (i in 1..8) {
-            val target = viewModel.uiState.value.targetCharacter
-            viewModel.submitGuess(target)
-            advanceUntilIdle()
-        }
-
-        for (i in 1..2) {
-            val target = viewModel.uiState.value.targetCharacter
-            val wrongGuess = if (target == "K") "M" else "K"
-            viewModel.submitGuess(wrongGuess)
-            advanceUntilIdle()
-        }
+        val target = viewModel.uiState.value.targetCharacter
+        viewModel.submitGuess(target)
+        advanceUntilIdle()
 
         val state = viewModel.uiState.value
-        assertEquals(10, state.sessionTotalAttempts)
-        assertEquals(8, state.sessionCorrectAttempts)
-        assertEquals(80.0f, state.sessionAccuracy, 0.001f)
-        // Level remains 1
         assertEquals(1, state.activeKochLevel)
         assertNull(state.levelUpMessage)
+    }
 
-        val profileInRepo = fakeRepository.getProfileById(testProfile.id)
-        assertEquals(1, profileInRepo?.currentKochLevel)
+    @Test
+    fun drillLifecycle_completesBatchAndHaltsAtSummary() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+        // Start drill with small batch of 3
+        viewModel.startLesson(3)
+        advanceUntilIdle()
+
+        assertEquals(1, viewModel.uiState.value.currentChallengeIndex)
+        assertEquals(3, viewModel.uiState.value.sessionBatchSize)
+
+        // Guess 1
+        viewModel.submitGuess(viewModel.uiState.value.targetCharacter)
+        advanceUntilIdle()
+        assertFalse(viewModel.uiState.value.isSessionFinished)
+
+        // Guess 2
+        viewModel.submitGuess(viewModel.uiState.value.targetCharacter)
+        advanceUntilIdle()
+        assertFalse(viewModel.uiState.value.isSessionFinished)
+
+        // Guess 3 (completes batch)
+        viewModel.submitGuess(viewModel.uiState.value.targetCharacter)
+        advanceUntilIdle()
+
+        val finishedState = viewModel.uiState.value
+        assertTrue(finishedState.isSessionFinished)
+        assertFalse(finishedState.isSessionActive)
+        assertEquals(3, finishedState.sessionTotalAttempts)
+        assertEquals(3, finishedState.sessionCorrectAttempts)
+    }
+
+    @Test
+    fun returnToSetup_resetsSessionAndReturnsToSetupMode() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+        viewModel.startLesson(2)
+        advanceUntilIdle()
+
+        repeat(2) {
+            viewModel.submitGuess(viewModel.uiState.value.targetCharacter)
+            advanceUntilIdle()
+        }
+
+        assertTrue(viewModel.uiState.value.isSessionFinished)
+
+        viewModel.returnToSetup()
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.isSessionActive)
+        assertFalse(state.isSessionFinished)
+        assertEquals(0, state.currentChallengeIndex)
+        assertEquals("", state.targetCharacter)
     }
 
     @Test
     fun resetSession_clearsSessionScore() = runTest(testDispatcher) {
         viewModel.setActiveProfile(testProfile)
-        viewModel.startLesson()
+        advanceUntilIdle()
+        viewModel.startLesson(20)
         advanceUntilIdle()
 
         viewModel.submitGuess(viewModel.uiState.value.targetCharacter)
@@ -381,5 +456,26 @@ class TrainViewModelTest {
         assertNull(state.lastGuessedCharacter)
         assertNull(state.lastGuessWasCorrect)
         assertTrue(state.targetCharacter.isNotEmpty())
+    }
+
+    @Test
+    fun adaptiveVisualHints_characterMastered_addedToMasteredSet() = runTest(testDispatcher) {
+        // v1.7 proficiency: attempts >= 5 and accuracy >= 70.0%
+        fakeRepository.saveCharacterStat(
+            CharacterStats(
+                profileId = testProfile.id,
+                character = "K",
+                correctCount = 5,
+                incorrectCount = 0,
+                priorityWeight = 1.0f
+            )
+        )
+
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.masteredCharacters.contains("K"))
+        assertFalse(state.masteredCharacters.contains("M"))
     }
 }

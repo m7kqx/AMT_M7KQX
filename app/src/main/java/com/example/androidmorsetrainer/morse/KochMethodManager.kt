@@ -1,16 +1,39 @@
 package com.example.androidmorsetrainer.morse
 
+import com.example.androidmorsetrainer.data.local.entity.CharacterStats
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.random.Random
 
 /**
+ * Result data class when Koch advancement is evaluated.
+ */
+data class AdvancementResult(
+    val newLevel: Int,
+    val newlyUnlockedCharacter: String,
+    val message: String
+)
+
+/**
  * Manager handling the Koch method progression sequence, Morse conversions,
- * and adaptive priority-weighted challenge generation.
+ * dynamic priority challenge weighting, and advancement evaluation ported from v1.7.
  */
 class KochMethodManager(
     private val random: Random = Random.Default
 ) {
+
+    companion object {
+        const val PROMOTION_MIN_ATTEMPTS = 5
+        const val PROMOTION_ACCURACY_PERCENT = 70.0f
+        const val MASTERY_MIN_ATTEMPTS = 5
+        const val MASTERY_ACCURACY_PERCENT = 70.0f
+
+        const val BASE_WEIGHT = 1.0f
+        const val DEPRIVATION_WEIGHT_ZERO = 20.0f
+        const val DEPRIVATION_WEIGHT_FEW = 10.0f
+        const val NEW_LETTER_WEIGHT = 30.0f
+        const val INACCURACY_MULTIPLIER = 0.5f
+    }
 
     /**
      * Complete Koch sequence of 43 characters:
@@ -39,6 +62,16 @@ class KochMethodManager(
     }
 
     /**
+     * Returns the newest character introduced at the given Koch level.
+     * Level 1 -> "M"
+     * Level 2 -> "R"
+     * Level L -> sequence[L]
+     */
+    fun getLatestCharacterForLevel(level: Int): String {
+        return getCharactersForLevel(level).last()
+    }
+
+    /**
      * Converts a single character or prosign string into its Morse representation (dots and dashes).
      */
     fun getMorseCode(character: String): String? {
@@ -53,9 +86,82 @@ class KochMethodManager(
     }
 
     /**
+     * Calculates the dynamic priority weight for a character exactly as ported from v1.7:
+     * 1. Base Weight (1.0): Ensures highly accurate characters never hit 0% probability.
+     * 2. Session Deprivation Weighting: +20.0 if 0 session attempts; +10.0 if < 5 session attempts.
+     * 3. New Letter Priority Weighting: +30.0 if < 10 global attempts.
+     * 4. Inaccuracy Weighting: + (100.0 - accuracy) * 0.5.
+     */
+    fun calculatePriorityWeight(
+        globalAttempts: Int,
+        globalCorrect: Int,
+        sessionAttempts: Int
+    ): Float {
+        var weight = BASE_WEIGHT
+
+        // 2. Session Deprivation Weighting
+        if (sessionAttempts == 0) {
+            weight += DEPRIVATION_WEIGHT_ZERO
+        } else if (sessionAttempts < 5) {
+            weight += DEPRIVATION_WEIGHT_FEW
+        }
+
+        // 3. New Letter Priority Weighting
+        if (globalAttempts < 10) {
+            weight += NEW_LETTER_WEIGHT
+        }
+
+        // 4. Inaccuracy Weighting
+        val acc = if (globalAttempts > 0) {
+            (globalCorrect.toFloat() / globalAttempts) * 100.0f
+        } else {
+            0.0f
+        }
+        weight += (100.0f - acc) * INACCURACY_MULTIPLIER
+
+        return weight
+    }
+
+    /**
+     * Roulette wheel selection based on dynamic priority weights ported from v1.7.
+     * Enforces targeted practice on weak, newly unlocked, and session-deprived characters.
+     */
+    fun getNextChallenge(
+        pool: List<String>,
+        globalStats: Map<String, CharacterStats>,
+        sessionAttempts: Map<String, Int>
+    ): String {
+        require(pool.isNotEmpty()) { "Character pool must not be empty" }
+        if (pool.size == 1) return pool.first()
+
+        val weights = pool.map { char ->
+            val stat = globalStats[char.uppercase()]
+            val gAttempts = (stat?.correctCount ?: 0) + (stat?.incorrectCount ?: 0)
+            val gCorrect = stat?.correctCount ?: 0
+            val sAttempts = sessionAttempts[char.uppercase()] ?: 0
+            calculatePriorityWeight(
+                globalAttempts = gAttempts,
+                globalCorrect = gCorrect,
+                sessionAttempts = sAttempts
+            )
+        }
+
+        val totalWeight = weights.sum()
+        val randomThreshold = random.nextFloat() * totalWeight
+
+        var cumulative = 0.0f
+        for (i in pool.indices) {
+            cumulative += weights[i]
+            if (cumulative >= randomThreshold) {
+                return pool[i]
+            }
+        }
+        return pool.last()
+    }
+
+    /**
      * Selects a single character from the provided pool using fitness/roulette-wheel weighted random sampling.
-     * Characters with higher priority weights are sampled more frequently.
-     * Default baseline weight for unrecorded characters is 1.0f.
+     * Maintained for backwards compatibility.
      */
     fun getWeightedRandomCharacter(
         pool: List<String>,
@@ -82,7 +188,6 @@ class KochMethodManager(
 
     /**
      * Generates a random challenge group of characters for a given level and priority weights.
-     * Standard ham radio training group size is typically 5 characters.
      */
     fun generateChallenge(
         level: Int,
@@ -98,9 +203,6 @@ class KochMethodManager(
 
     /**
      * Calculates the updated priority weight following a challenge result.
-     * Replicates the adaptive Koch logic:
-     * - Incorrect response: increases weight sharply so the user is challenged on it more often.
-     * - Correct response: relaxes weight towards baseline (1.0f).
      */
     fun calculateUpdatedWeight(
         currentWeight: Float,
@@ -109,11 +211,48 @@ class KochMethodManager(
         maxWeight: Float = 5.0f
     ): Float {
         return if (wasCorrect) {
-            // Decay weight towards 1.0f
             max(minWeight, currentWeight * 0.85f)
         } else {
-            // Boost weight to force frequent appearance
             min(maxWeight, currentWeight * 1.4f + 0.3f)
         }
+    }
+
+    /**
+     * Checks whether a character has reached proficiency ported from v1.7:
+     * attempts >= 5 and accuracy >= 70.0%
+     */
+    fun isProficient(correctCount: Int, incorrectCount: Int): Boolean {
+        val attempts = correctCount + incorrectCount
+        if (attempts < MASTERY_MIN_ATTEMPTS) return false
+        val accuracy = (correctCount.toFloat() / attempts) * 100.0f
+        return accuracy >= MASTERY_ACCURACY_PERCENT
+    }
+
+    /**
+     * Evaluates Koch level advancement ported from v1.7:
+     * Targets the most recently introduced letter in the sequence.
+     * Advances as soon as that letter is learned (attempts >= 5 and accuracy >= 70.0%).
+     */
+    fun evaluateAdvancement(
+        currentLevel: Int,
+        latestCharStats: CharacterStats?
+    ): AdvancementResult? {
+        if (currentLevel >= maxLevel) return null
+        if (latestCharStats == null) return null
+
+        val attempts = latestCharStats.correctCount + latestCharStats.incorrectCount
+        if (attempts < PROMOTION_MIN_ATTEMPTS) return null
+
+        val accuracy = (latestCharStats.correctCount.toFloat() / attempts) * 100.0f
+        if (accuracy >= PROMOTION_ACCURACY_PERCENT) {
+            val nextLevel = min(currentLevel + 1, maxLevel)
+            val newLetter = getLatestCharacterForLevel(nextLevel)
+            return AdvancementResult(
+                newLevel = nextLevel,
+                newlyUnlockedCharacter = newLetter,
+                message = "Koch Level $nextLevel (+ '$newLetter')"
+            )
+        }
+        return null
     }
 }

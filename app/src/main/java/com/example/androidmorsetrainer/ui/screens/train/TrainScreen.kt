@@ -26,7 +26,9 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Cancel
@@ -42,6 +44,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -81,96 +85,422 @@ fun TrainScreen(
     if (activeProfile == null) {
         NoProfileScreen(modifier = modifier)
     } else {
-        if (uiState.showStartLessonDialog) {
-            StartLessonDialog(
-                kochLevel = uiState.activeKochLevel,
-                profileName = activeProfile.name,
-                availableCharacters = uiState.availableCharacters,
-                onConfirm = viewModel::startLesson,
-                onDismiss = viewModel::dismissStartLessonDialog
-            )
+        when {
+            !uiState.isSessionActive && !uiState.isSessionFinished -> {
+                TrainPreDrillSetupContent(
+                    uiState = uiState,
+                    profileName = activeProfile.name,
+                    onSelectDrillLength = viewModel::setDrillLength,
+                    onStartDrill = { viewModel.startLesson(uiState.selectedDrillLength) },
+                    modifier = modifier
+                )
+            }
+            uiState.isSessionFinished -> {
+                TrainDrillSummaryContent(
+                    uiState = uiState,
+                    onStartNewDrill = { viewModel.startLesson(uiState.selectedDrillLength) },
+                    onReturnToSetup = viewModel::returnToSetup,
+                    onDismissLevelUpMessage = viewModel::dismissLevelUpMessage,
+                    modifier = modifier
+                )
+            }
+            else -> {
+                TrainScreenContent(
+                    uiState = uiState,
+                    onPlayTone = viewModel::playTone,
+                    onGuess = viewModel::submitGuess,
+                    onResetSession = viewModel::resetSession,
+                    onDismissLevelUpMessage = viewModel::dismissLevelUpMessage,
+                    onStartLesson = viewModel::startLesson,
+                    modifier = modifier
+                )
+            }
         }
-
-        TrainScreenContent(
-            uiState = uiState,
-            onPlayTone = viewModel::playTone,
-            onGuess = viewModel::submitGuess,
-            onResetSession = viewModel::resetSession,
-            onDismissLevelUpMessage = viewModel::dismissLevelUpMessage,
-            onStartLesson = viewModel::startLesson,
-            modifier = modifier
-        )
     }
 }
 
+/**
+ * Dedicated Material 3 Pre-Drill Setup Screen for Receive Mode.
+ * Allows the user to select drill length (20, 50, 100 challenges) and review active characters.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StartLessonDialog(
-    kochLevel: Int,
+private fun TrainPreDrillSetupContent(
+    uiState: TrainUiState,
     profileName: String,
-    availableCharacters: List<String>,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onSelectDrillLength: (Int) -> Unit,
+    onStartDrill: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = {
-            Icon(
-                imageVector = Icons.Default.School,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp)
-            )
-        },
-        title = {
-            Text(
-                text = "Start Lesson",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-        },
-        text = {
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 1. Header Card: Mode & Trainee Profile
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+            shape = RoundedCornerShape(20.dp)
+        ) {
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "RECEIVE DRILL SETUP",
+                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.5.sp),
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = "Koch Level ${uiState.activeKochLevel} of 42",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        if (profileName.isNotEmpty()) {
+                            Text(
+                                text = "Trainee: $profileName",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.primary
+                    ) {
+                        Text(
+                            text = "${uiState.availableCharacters.size} Chars",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Active sequence chips
+                Text(
+                    text = "Active Characters Pool:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    uiState.availableCharacters.forEach { char ->
+                        val isMastered = char.uppercase() in uiState.masteredCharacters
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isMastered) Color(0xFF10B981).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(
+                                1.dp,
+                                if (isMastered) Color(0xFF10B981) else MaterialTheme.colorScheme.outlineVariant
+                            )
+                        ) {
+                            Text(
+                                text = char,
+                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = FontFamily.Monospace),
+                                fontWeight = FontWeight.Bold,
+                                color = if (isMastered) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Drill Length Selection Card (20, 50, 100)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp)
             ) {
                 Text(
-                    text = if (profileName.isNotEmpty()) {
-                        "Ready to begin training for $profileName at Koch Level $kochLevel?"
-                    } else {
-                        "Ready to begin training at Koch Level $kochLevel?"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
+                    text = "SELECT DRILL LENGTH",
+                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Select number of challenges in this practice session",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (availableCharacters.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "Active Characters: ${availableCharacters.joinToString(" ")}",
-                        style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        textAlign = TextAlign.Center
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val drillOptions = listOf(20 to "Quick", 50 to "Standard", 100 to "Endurance")
+                    drillOptions.forEach { (count, label) ->
+                        val isSelected = uiState.selectedDrillLength == count
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { onSelectDrillLength(count) },
+                            modifier = Modifier.weight(1f),
+                            label = {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "$count",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 3. Drill Objectives & Information Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Training Objectives",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "• Listen to synthesized Morse audio tones at standard Paris timing.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "• Legacy v1.7 dynamic priority will increase frequency of newly unlocked or struggling characters.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "• Achieve ≥ 70% accuracy across ≥ 5 attempts on the latest character to advance to the next Koch level.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.weight(1f, fill = false))
+
+        // 4. Prominent "Start Drill" Action Button
+        Button(
+            onClick = onStartDrill,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(60.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.School,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "Start Receive Drill (${uiState.selectedDrillLength} Challenges)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Dedicated Material 3 Completion Summary Screen for Receive Mode.
+ */
+@Composable
+private fun TrainDrillSummaryContent(
+    uiState: TrainUiState,
+    onStartNewDrill: () -> Unit,
+    onReturnToSetup: () -> Unit,
+    onDismissLevelUpMessage: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // 1. Completion Trophy Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+            shape = RoundedCornerShape(22.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.EmojiEvents,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(68.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "DRILL COMPLETE!",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    text = "Completed ${uiState.sessionBatchSize} challenges",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                )
+            }
+        }
+
+        // 2. Celebratory Level-Up Banner (if triggered)
+        if (uiState.levelUpMessage != null) {
+            LevelUpBanner(
+                message = uiState.levelUpMessage,
+                onDismiss = onDismissLevelUpMessage
+            )
+        }
+
+        // 3. Performance Summary Metrics
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+                Text(
+                    text = "Performance Breakdown",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    ScoreMetricTile(
+                        title = "Accuracy",
+                        value = uiState.accuracyFormatted,
+                        valueColor = when {
+                            uiState.sessionAccuracy >= 70.0f -> Color(0xFF10B981)
+                            else -> MaterialTheme.colorScheme.error
+                        }
+                    )
+                    ScoreMetricTile(
+                        title = "Score",
+                        value = "${uiState.sessionCorrectAttempts} / ${uiState.sessionTotalAttempts}",
+                        valueColor = MaterialTheme.colorScheme.onSurface
+                    )
+                    ScoreMetricTile(
+                        title = "Koch Level",
+                        value = "${uiState.activeKochLevel}",
+                        valueColor = MaterialTheme.colorScheme.primary
                     )
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("Start Lesson")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        },
-        shape = RoundedCornerShape(24.dp)
-    )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 4. Action Buttons
+        Button(
+            onClick = onStartNewDrill,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+        ) {
+            Icon(Icons.Default.Refresh, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Start Another Drill (${uiState.selectedDrillLength})",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        OutlinedButton(
+            onClick = onReturnToSetup,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Text(
+                text = "Change Drill Setup",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
 }
 
 @Composable
@@ -252,7 +582,52 @@ fun TrainScreenContent(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Active Koch Level visual indicator and progression
+        // 1. Session Progress Banner ("Challenge 5/20")
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Challenge ${uiState.currentChallengeIndex} of ${uiState.sessionBatchSize}",
+                            style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Accuracy: ${uiState.accuracyFormatted}",
+                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    LinearProgressIndicator(
+                        progress = { uiState.progressFraction },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+                }
+            }
+        }
+
+        // 2. Active Koch Level visual indicator and progression
         item(span = { GridItemSpan(maxLineSpan) }) {
             KochLevelHeader(
                 activeLevel = uiState.activeKochLevel,
@@ -261,7 +636,7 @@ fun TrainScreenContent(
             )
         }
 
-        // 2. Celebratory Level-Up Banner (if triggered)
+        // 3. Celebratory Level-Up Banner (if triggered)
         if (uiState.levelUpMessage != null) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 LevelUpBanner(
@@ -271,19 +646,19 @@ fun TrainScreenContent(
             }
         }
 
-        // 3. Real-Time Score & Accuracy Feedback
+        // 4. Real-Time Score & Accuracy Feedback
         item(span = { GridItemSpan(maxLineSpan) }) {
             ScoreFeedbackCard(
                 accuracy = uiState.sessionAccuracy,
                 accuracyFormatted = uiState.accuracyFormatted,
                 correctCount = uiState.sessionCorrectAttempts,
                 totalCount = uiState.sessionTotalAttempts,
-                minAttempts = TrainViewModel.DEFAULT_MIN_ATTEMPTS,
+                minAttempts = uiState.sessionBatchSize,
                 onResetSession = onResetSession
             )
         }
 
-        // 4. Last Guess Outcome Feedback Banner
+        // 5. Last Guess Outcome Feedback Banner
         if (uiState.lastGuessWasCorrect != null && uiState.feedbackMessage != null) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 GuessFeedbackBanner(
@@ -293,7 +668,7 @@ fun TrainScreenContent(
             }
         }
 
-        // 5. Large "Play Tone" Button
+        // 6. Large "Play Tone" Button
         item(span = { GridItemSpan(maxLineSpan) }) {
             PlayToneButton(
                 isPlaying = uiState.isPlayingAudio,
@@ -303,7 +678,7 @@ fun TrainScreenContent(
             )
         }
 
-        // 6. Answer Grid Section Title
+        // 7. Answer Grid Section Title
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)) {
                 Text(
@@ -319,7 +694,7 @@ fun TrainScreenContent(
             }
         }
 
-        // 7. Dynamic Grid of Answer Buttons with Crossfade animation on challenge state change
+        // 8. Dynamic Grid of Answer Buttons with Crossfade animation on challenge state change
         item(span = { GridItemSpan(maxLineSpan) }) {
             Crossfade(
                 targetState = uiState.targetCharacter,
@@ -330,6 +705,7 @@ fun TrainScreenContent(
                     availableCharacters = uiState.availableCharacters,
                     lastGuessedCharacter = uiState.lastGuessedCharacter,
                     lastGuessWasCorrect = uiState.lastGuessWasCorrect,
+                    masteredCharacters = uiState.masteredCharacters,
                     hasTarget = uiState.hasTarget,
                     onGuess = onGuess
                 )
@@ -343,6 +719,7 @@ private fun AnswerGrid(
     availableCharacters: List<String>,
     lastGuessedCharacter: String?,
     lastGuessWasCorrect: Boolean?,
+    masteredCharacters: Set<String> = emptySet(),
     hasTarget: Boolean,
     onGuess: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -369,10 +746,12 @@ private fun AnswerGrid(
                 rowItems.forEach { character ->
                     val isLastGuessed = lastGuessedCharacter == character
                     val morseCode = MorseConstants.MORSE_MAP[character.uppercase()] ?: ""
+                    val showHint = character.uppercase() !in masteredCharacters
                     Box(modifier = Modifier.weight(1f)) {
                         AnswerButton(
                             character = character,
                             morseCode = morseCode,
+                            showHint = showHint,
                             isLastGuessed = isLastGuessed,
                             lastGuessCorrect = if (isLastGuessed) lastGuessWasCorrect else null,
                             enabled = hasTarget,
@@ -776,6 +1155,7 @@ private fun PlayToneButton(
 private fun AnswerButton(
     character: String,
     morseCode: String,
+    showHint: Boolean = true,
     isLastGuessed: Boolean,
     lastGuessCorrect: Boolean?,
     enabled: Boolean,
@@ -823,7 +1203,7 @@ private fun AnswerButton(
                     else -> MaterialTheme.colorScheme.onSurface
                 }
             )
-            if (morseCode.isNotEmpty()) {
+            if (showHint && morseCode.isNotEmpty()) {
                 Text(
                     text = morseCode,
                     style = MaterialTheme.typography.bodySmall.copy(
