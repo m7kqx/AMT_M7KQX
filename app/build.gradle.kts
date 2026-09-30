@@ -20,7 +20,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.androidmorsetrainer"
+        applicationId = "uk.co.m7kqx.cwbootcamp"
         minSdk = 24
         targetSdk = 37
         versionCode = 1
