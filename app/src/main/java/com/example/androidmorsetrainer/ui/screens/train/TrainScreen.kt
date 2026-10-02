@@ -85,8 +85,8 @@ fun TrainScreen(
     if (activeProfile == null) {
         NoProfileScreen(modifier = modifier)
     } else {
-        when {
-            !uiState.isSessionActive && !uiState.isSessionFinished -> {
+        when (uiState.drillState) {
+            DrillState.DrillSetup -> {
                 TrainPreDrillSetupContent(
                     uiState = uiState,
                     profileName = activeProfile.name,
@@ -95,7 +95,7 @@ fun TrainScreen(
                     modifier = modifier
                 )
             }
-            uiState.isSessionFinished -> {
+            DrillState.Finished -> {
                 TrainDrillSummaryContent(
                     uiState = uiState,
                     onStartNewDrill = { viewModel.startLesson(uiState.selectedDrillLength) },
@@ -104,7 +104,7 @@ fun TrainScreen(
                     modifier = modifier
                 )
             }
-            else -> {
+            DrillState.DrillActive, DrillState.ShowingResult -> {
                 TrainScreenContent(
                     uiState = uiState,
                     onPlayTone = viewModel::playTone,
@@ -582,58 +582,60 @@ fun TrainScreenContent(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Session Progress Banner ("Challenge 5/20")
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+        if (uiState.drillState == DrillState.DrillSetup) {
+            // 1. Session Progress Banner ("Challenge 5/20")
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Challenge ${uiState.currentChallengeIndex} of ${uiState.sessionBatchSize}",
-                            style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = "Accuracy: ${uiState.accuracyFormatted}",
-                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    LinearProgressIndicator(
-                        progress = { uiState.progressFraction },
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(6.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    )
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Challenge ${uiState.currentChallengeIndex} of ${uiState.sessionBatchSize}",
+                                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Accuracy: ${uiState.accuracyFormatted}",
+                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        LinearProgressIndicator(
+                            progress = { uiState.progressFraction },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                        )
+                    }
                 }
             }
-        }
 
-        // 2. Active Koch Level visual indicator and progression
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            KochLevelHeader(
-                activeLevel = uiState.activeKochLevel,
-                profileName = uiState.activeProfile?.name.orEmpty(),
-                availableCharacters = uiState.availableCharacters
-            )
+            // 2. Active Koch Level visual indicator and progression
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                KochLevelHeader(
+                    activeLevel = uiState.activeKochLevel,
+                    profileName = uiState.activeProfile?.name.orEmpty(),
+                    availableCharacters = uiState.availableCharacters
+                )
+            }
         }
 
         // 3. Celebratory Level-Up Banner (if triggered)
@@ -659,12 +661,19 @@ fun TrainScreenContent(
         }
 
         // 5. Last Guess Outcome Feedback Banner
-        if (uiState.lastGuessWasCorrect != null && uiState.feedbackMessage != null) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                GuessFeedbackBanner(
-                    isCorrect = uiState.lastGuessWasCorrect,
-                    message = uiState.feedbackMessage
-                )
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(64.dp), // Fixed height to prevent UI shifting
+                contentAlignment = Alignment.Center
+            ) {
+                if (uiState.lastGuessWasCorrect != null && uiState.feedbackMessage != null) {
+                    GuessFeedbackBanner(
+                        isCorrect = uiState.lastGuessWasCorrect,
+                        message = uiState.feedbackMessage
+                    )
+                }
             }
         }
 
@@ -672,9 +681,8 @@ fun TrainScreenContent(
         item(span = { GridItemSpan(maxLineSpan) }) {
             PlayToneButton(
                 isPlaying = uiState.isPlayingAudio,
-                hasTarget = uiState.hasTarget,
-                isReplay = uiState.isReplayTone,
-                onClick = if (uiState.hasTarget) onPlayTone else onStartLesson
+                drillState = uiState.drillState,
+                onClick = if (uiState.drillState == DrillState.DrillSetup) onStartLesson else onPlayTone
             )
         }
 
@@ -707,6 +715,7 @@ fun TrainScreenContent(
                     lastGuessWasCorrect = uiState.lastGuessWasCorrect,
                     masteredCharacters = uiState.masteredCharacters,
                     hasTarget = uiState.hasTarget,
+                    drillState = uiState.drillState,
                     onGuess = onGuess
                 )
             }
@@ -721,6 +730,7 @@ private fun AnswerGrid(
     lastGuessWasCorrect: Boolean?,
     masteredCharacters: Set<String> = emptySet(),
     hasTarget: Boolean,
+    drillState: DrillState,
     onGuess: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -754,7 +764,7 @@ private fun AnswerGrid(
                             showHint = showHint,
                             isLastGuessed = isLastGuessed,
                             lastGuessCorrect = if (isLastGuessed) lastGuessWasCorrect else null,
-                            enabled = hasTarget,
+                            enabled = hasTarget && drillState == DrillState.DrillActive,
                             onClick = { onGuess(character) }
                         )
                     }
@@ -1080,13 +1090,12 @@ private fun GuessFeedbackBanner(
 @Composable
 private fun PlayToneButton(
     isPlaying: Boolean,
-    hasTarget: Boolean,
-    isReplay: Boolean,
+    drillState: DrillState,
     onClick: () -> Unit
 ) {
     Button(
         onClick = onClick,
-        enabled = if (hasTarget) !isPlaying else true,
+        enabled = if (drillState != DrillState.DrillSetup) !isPlaying else true,
         modifier = Modifier
             .fillMaxWidth()
             .height(64.dp),
@@ -1114,7 +1123,7 @@ private fun PlayToneButton(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimary
                 )
-            } else if (!hasTarget) {
+            } else if (drillState == DrillState.DrillSetup) {
                 Icon(
                     imageVector = Icons.Default.School,
                     contentDescription = null,
@@ -1123,21 +1132,21 @@ private fun PlayToneButton(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = "Start Lesson",
+                    text = "Start Drill",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimary
                 )
             } else {
                 Icon(
-                    imageVector = if (isReplay) Icons.Default.GraphicEq else Icons.AutoMirrored.Filled.VolumeUp,
+                    imageVector = Icons.Default.GraphicEq,
                     contentDescription = null,
                     modifier = Modifier.size(28.dp),
                     tint = MaterialTheme.colorScheme.onPrimary
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = if (isReplay) "Replay Tone" else "Play Tone",
+                    text = "Repeat Tone",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimary

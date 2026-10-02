@@ -526,7 +526,30 @@ class SendViewModel(
      */
     fun setTargetFrequency(frequencyHz: Double) {
         dspManager.setTargetFrequency(frequencyHz)
-        _uiState.update { it.copy(targetFrequencyHz = frequencyHz) }
+        _uiState.update { it.copy(targetFrequencyHz = frequencyHz, isCustomFrequency = false) }
+    }
+
+    /**
+     * Enables or disables the custom frequency mode.
+     */
+    fun setCustomFrequencyMode(isCustom: Boolean) {
+        _uiState.update { it.copy(isCustomFrequency = isCustom) }
+        // If enabling custom mode, attempt to immediately apply the current custom string
+        if (isCustom) {
+            setCustomFrequencyString(_uiState.value.customFrequencyString)
+        }
+    }
+
+    /**
+     * Updates the custom frequency string and parses it to update the DSP engine if valid.
+     */
+    fun setCustomFrequencyString(value: String) {
+        _uiState.update { it.copy(customFrequencyString = value) }
+        val parsedFreq = value.toDoubleOrNull()
+        if (parsedFreq != null && parsedFreq in 100.0..3000.0) {
+            dspManager.setTargetFrequency(parsedFreq)
+            _uiState.update { it.copy(targetFrequencyHz = parsedFreq) }
+        }
     }
 
     /**

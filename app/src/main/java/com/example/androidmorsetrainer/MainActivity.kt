@@ -57,7 +57,8 @@ fun MorseTrainerApp(
     profilesViewModel: ProfilesViewModel = viewModel(factory = ProfilesViewModel.Factory),
     trainViewModel: TrainViewModel = viewModel(factory = TrainViewModel.Factory),
     sendViewModel: SendViewModel = viewModel(factory = SendViewModel.Factory),
-    decodeViewModel: DecodeViewModel = viewModel(factory = DecodeViewModel.Factory)
+    decodeViewModel: DecodeViewModel = viewModel(factory = DecodeViewModel.Factory),
+    debugViewModel: com.example.androidmorsetrainer.ui.screens.debug.DebugViewModel = viewModel(factory = com.example.androidmorsetrainer.ui.screens.debug.DebugViewModel.Factory)
 ) {
     val profilesUiState by profilesViewModel.uiState.collectAsStateWithLifecycle()
     var currentTab by rememberSaveable { mutableStateOf(NavigationTab.PROFILES) }
@@ -76,6 +77,7 @@ fun MorseTrainerApp(
                                 NavigationTab.SEND -> "Hardware Keying Practice"
                                 NavigationTab.DECODE -> "Morse Decoder"
                                 NavigationTab.PROFILES -> "User Profiles"
+                                NavigationTab.DEBUG -> "Debug Mode"
                             },
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleLarge
@@ -151,6 +153,12 @@ fun MorseTrainerApp(
                     onSelectProfile = profilesViewModel::onSelectProfile,
                     onClearUserMessage = profilesViewModel::onClearUserMessage,
                     onClearError = profilesViewModel::onClearError,
+                    modifier = contentModifier
+                )
+            }
+            NavigationTab.DEBUG -> {
+                com.example.androidmorsetrainer.ui.screens.debug.DebugScreen(
+                    viewModel = debugViewModel,
                     modifier = contentModifier
                 )
             }

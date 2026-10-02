@@ -60,6 +60,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -121,6 +122,8 @@ fun SendScreen(
                     onRequestPermission = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
                     onSelectDrillLength = viewModel::setDrillLength,
                     onSetFrequency = viewModel::setTargetFrequency,
+                    onSetCustomFrequencyMode = viewModel::setCustomFrequencyMode,
+                    onSetCustomFrequencyString = viewModel::setCustomFrequencyString,
                     onSetSquelch = viewModel::setSquelchLevel,
                     onToggleListening = viewModel::toggleListening,
                     onStartDrill = { viewModel.startLesson(uiState.selectedDrillLength) },
@@ -141,6 +144,8 @@ fun SendScreen(
                     onRequestPermission = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
                     onToggleListening = viewModel::toggleListening,
                     onSetFrequency = viewModel::setTargetFrequency,
+                    onSetCustomFrequencyMode = viewModel::setCustomFrequencyMode,
+                    onSetCustomFrequencyString = viewModel::setCustomFrequencyString,
                     onSetSquelch = viewModel::setSquelchLevel,
                     onClearDecodedText = viewModel::clearDecodedText,
                     onSkipChallenge = viewModel::skipChallenge,
@@ -158,7 +163,7 @@ fun SendScreen(
  * Enables adjusting squelch against ambient noise using the Goertzel Red/Green dot
  * and choosing drill length before starting the practice session.
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun SendPreDrillSetupContent(
     uiState: SendUiState,
@@ -166,6 +171,8 @@ private fun SendPreDrillSetupContent(
     onRequestPermission: () -> Unit,
     onSelectDrillLength: (Int) -> Unit,
     onSetFrequency: (Double) -> Unit,
+    onSetCustomFrequencyMode: (Boolean) -> Unit,
+    onSetCustomFrequencyString: (String) -> Unit,
     onSetSquelch: (Float) -> Unit,
     onToggleListening: () -> Unit,
     onStartDrill: () -> Unit,
@@ -347,23 +354,60 @@ private fun SendPreDrillSetupContent(
                         }
                     }
 
-                    // Pitch Selector Chips
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf(550.0, 600.0, 650.0, 700.0).forEach { freq ->
-                            val isSelected = uiState.targetFrequencyHz == freq
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = { onSetFrequency(freq) },
-                                label = {
-                                    Text(
-                                        text = "${freq.toInt()}Hz",
-                                        style = MaterialTheme.typography.labelSmall
+                    // Pitch Selector Dropdown
+                    var expanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                    val options = listOf(550.0, 600.0, 650.0, 700.0)
+
+                    Column(horizontalAlignment = Alignment.End) {
+                        androidx.compose.material3.ExposedDropdownMenuBox(
+                            expanded = expanded,
+                            onExpandedChange = { expanded = !expanded },
+                            modifier = Modifier.width(130.dp)
+                        ) {
+                            androidx.compose.material3.OutlinedTextField(
+                                value = if (uiState.isCustomFrequency) "Custom" else "${uiState.targetFrequencyHz.toInt()} Hz",
+                                onValueChange = {},
+                                readOnly = true,
+                                trailingIcon = { androidx.compose.material3.ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                                modifier = Modifier.menuAnchor(),
+                                textStyle = MaterialTheme.typography.bodyMedium,
+                                singleLine = true
+                            )
+                            ExposedDropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false }
+                            ) {
+                                options.forEach { freq ->
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = { Text("${freq.toInt()} Hz") },
+                                        onClick = {
+                                            onSetFrequency(freq)
+                                            expanded = false
+                                        }
                                     )
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                }
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Custom") },
+                                    onClick = {
+                                        onSetCustomFrequencyMode(true)
+                                        expanded = false
+                                    }
                                 )
+                            }
+                        }
+                        
+                        if (uiState.isCustomFrequency) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            androidx.compose.material3.OutlinedTextField(
+                                value = uiState.customFrequencyString,
+                                onValueChange = onSetCustomFrequencyString,
+                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                                ),
+                                modifier = Modifier.width(130.dp),
+                                textStyle = MaterialTheme.typography.bodyMedium,
+                                singleLine = true,
+                                suffix = { Text("Hz", style = MaterialTheme.typography.bodySmall) }
                             )
                         }
                     }
@@ -780,6 +824,8 @@ fun SendScreenContent(
     onRequestPermission: () -> Unit,
     onToggleListening: () -> Unit,
     onSetFrequency: (Double) -> Unit,
+    onSetCustomFrequencyMode: (Boolean) -> Unit,
+    onSetCustomFrequencyString: (String) -> Unit,
     onSetSquelch: (Float) -> Unit,
     onClearDecodedText: () -> Unit,
     onSkipChallenge: () -> Unit,
@@ -909,9 +955,13 @@ fun SendScreenContent(
             isTonePresent = uiState.isTonePresent,
             isListening = uiState.isListening,
             targetFreqHz = uiState.targetFrequencyHz,
+            isCustomFrequency = uiState.isCustomFrequency,
+            customFrequencyString = uiState.customFrequencyString,
             magnitude = uiState.currentMagnitude,
             threshold = uiState.detectionThreshold,
-            onSetFrequency = onSetFrequency
+            onSetFrequency = onSetFrequency,
+            onSetCustomFrequencyMode = onSetCustomFrequencyMode,
+            onSetCustomFrequencyString = onSetCustomFrequencyString
         )
 
         // 7. Dynamic Squelch Control Slider
@@ -944,14 +994,19 @@ fun SendScreenContent(
 /**
  * High-visibility tone status panel with Red/Green Goertzel detection dot.
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun SendToneDetectorStatusCard(
     isTonePresent: Boolean,
     isListening: Boolean,
     targetFreqHz: Double,
+    isCustomFrequency: Boolean,
+    customFrequencyString: String,
     magnitude: Double,
     threshold: Double,
-    onSetFrequency: (Double) -> Unit
+    onSetFrequency: (Double) -> Unit,
+    onSetCustomFrequencyMode: (Boolean) -> Unit,
+    onSetCustomFrequencyString: (String) -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1002,23 +1057,60 @@ private fun SendToneDetectorStatusCard(
                     }
                 }
 
-                // Quick Pitch Tuning Chips
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(550.0, 600.0, 650.0, 700.0).forEach { freq ->
-                        val isSelected = targetFreqHz == freq
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { onSetFrequency(freq) },
-                            label = {
-                                Text(
-                                    text = "${freq.toInt()}Hz",
-                                    style = MaterialTheme.typography.labelSmall
+                // Quick Pitch Tuning Dropdown
+                var expanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                val options = listOf(550.0, 600.0, 650.0, 700.0)
+
+                Column(horizontalAlignment = Alignment.End) {
+                    androidx.compose.material3.ExposedDropdownMenuBox(
+                        expanded = expanded,
+                        onExpandedChange = { expanded = !expanded },
+                        modifier = Modifier.width(130.dp)
+                    ) {
+                        androidx.compose.material3.OutlinedTextField(
+                            value = if (isCustomFrequency) "Custom" else "${targetFreqHz.toInt()} Hz",
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = { androidx.compose.material3.ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            modifier = Modifier.menuAnchor(),
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            singleLine = true
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            options.forEach { freq ->
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("${freq.toInt()} Hz") },
+                                    onClick = {
+                                        onSetFrequency(freq)
+                                        expanded = false
+                                    }
                                 )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            }
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Custom") },
+                                onClick = {
+                                    onSetCustomFrequencyMode(true)
+                                    expanded = false
+                                }
                             )
+                        }
+                    }
+
+                    if (isCustomFrequency) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        androidx.compose.material3.OutlinedTextField(
+                            value = customFrequencyString,
+                            onValueChange = onSetCustomFrequencyString,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                            ),
+                            modifier = Modifier.width(130.dp),
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            singleLine = true,
+                            suffix = { Text("Hz", style = MaterialTheme.typography.bodySmall) }
                         )
                     }
                 }

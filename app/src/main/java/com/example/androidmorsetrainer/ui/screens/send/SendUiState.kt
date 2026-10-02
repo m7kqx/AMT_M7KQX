@@ -26,6 +26,8 @@ data class SendUiState(
     val isListening: Boolean = false,
     val isTonePresent: Boolean = false,
     val targetFrequencyHz: Double = 700.0,
+    val isCustomFrequency: Boolean = false,
+    val customFrequencyString: String = "700",
     val squelchLevel: Float = 0.091f,
     val detectionThreshold: Double = 0.05,
     val currentMagnitude: Double = 0.0,

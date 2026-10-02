@@ -87,7 +87,7 @@ class TrainViewModel(
         }
 
         val currentProfile = _uiState.value.activeProfile
-        if (currentProfile?.id == profile.id && currentProfile.currentKochLevel == profile.currentKochLevel && _uiState.value.isSessionActive) {
+        if (currentProfile?.id == profile.id && currentProfile.currentKochLevel == profile.currentKochLevel && _uiState.value.drillState == DrillState.DrillActive) {
             _uiState.update { it.copy(activeProfile = profile) }
             return
         }
@@ -109,8 +109,7 @@ class TrainViewModel(
                     isPlayingAudio = false,
                     isReplayTone = false,
                     showStartLessonDialog = false,
-                    isSessionActive = false,
-                    isSessionFinished = false,
+                    drillState = DrillState.DrillSetup,
                     currentChallengeIndex = 0,
                     sessionTotalAttempts = 0,
                     sessionCorrectAttempts = 0,
@@ -161,8 +160,7 @@ class TrainViewModel(
                     selectedDrillLength = batchSize,
                     sessionBatchSize = batchSize,
                     currentChallengeIndex = 1,
-                    isSessionActive = true,
-                    isSessionFinished = false,
+                    drillState = DrillState.DrillActive,
                     showStartLessonDialog = false,
                     targetCharacter = initialTarget,
                     sessionTotalAttempts = 0,
@@ -177,6 +175,7 @@ class TrainViewModel(
                     isReplayTone = false
                 )
             }
+            playTone()
         }
     }
 
@@ -187,8 +186,7 @@ class TrainViewModel(
         sessionCharacterAttempts.clear()
         _uiState.update {
             it.copy(
-                isSessionActive = false,
-                isSessionFinished = false,
+                drillState = DrillState.DrillSetup,
                 currentChallengeIndex = 0,
                 targetCharacter = "",
                 feedbackMessage = null,
@@ -216,7 +214,7 @@ class TrainViewModel(
      */
     fun playTone() {
         val target = _uiState.value.targetCharacter
-        if (target.isEmpty() || !_uiState.value.isSessionActive) return
+        if (target.isEmpty() || _uiState.value.drillState == DrillState.DrillSetup || _uiState.value.drillState == DrillState.Finished) return
 
         playbackJob?.cancel()
         playbackJob = viewModelScope.launch(ioDispatcher) {
@@ -243,12 +241,15 @@ class TrainViewModel(
         val currentState = _uiState.value
         val profile = currentState.activeProfile ?: return
         val target = currentState.targetCharacter
-        if (target.isEmpty() || !currentState.isSessionActive || currentState.isSessionFinished) return
+        if (target.isEmpty() || currentState.drillState != DrillState.DrillActive) return
 
         val isCorrect = guessedCharacter.equals(target, ignoreCase = true)
         Log.d(TAG, "Guess submitted: '$guessedCharacter', Target: '$target', isCorrect=$isCorrect, index=${currentState.currentChallengeIndex}/${currentState.sessionBatchSize}")
 
         viewModelScope.launch(ioDispatcher) {
+            // Enter ShowingResult state
+            _uiState.update { it.copy(drillState = DrillState.ShowingResult) }
+
             // 1. Update Room CharacterStats with adaptive priority weighting
             val existingStat = profileRepository.getStatForCharacter(profile.id, target)
             val currentWeight = existingStat?.priorityWeight ?: 1.0f
@@ -306,8 +307,7 @@ class TrainViewModel(
                         activeProfile = if (advancement != null) profile.copy(currentKochLevel = effectiveLevel) else profile,
                         activeKochLevel = effectiveLevel,
                         availableCharacters = activePool,
-                        isSessionActive = false,
-                        isSessionFinished = true,
+                        drillState = DrillState.Finished,
                         sessionTotalAttempts = newTotalAttempts,
                         sessionCorrectAttempts = newCorrectAttempts,
                         sessionAccuracy = newAccuracy,
@@ -321,6 +321,23 @@ class TrainViewModel(
                     )
                 }
             } else {
+                // Wait for 1.5s to show result
+                _uiState.update {
+                    it.copy(
+                        sessionTotalAttempts = newTotalAttempts,
+                        sessionCorrectAttempts = newCorrectAttempts,
+                        sessionAccuracy = newAccuracy,
+                        lastGuessedCharacter = guessedCharacter,
+                        lastGuessWasCorrect = isCorrect,
+                        feedbackMessage = if (isCorrect) "Correct! Target was '$target'" else "Incorrect. Target was '$target', you guessed '$guessedCharacter'",
+                        levelUpMessage = levelUpMsg ?: currentState.levelUpMessage,
+                        masteredCharacters = updatedMastered,
+                        sessionCharacterAttempts = sessionCharacterAttempts.toMap()
+                    )
+                }
+                
+                kotlinx.coroutines.delay(1500)
+
                 // Pick next challenge using v1.7 dynamic priority weighting
                 val nextTarget = pickNextTarget(profile.id, effectiveLevel)
                 _uiState.update {
@@ -330,18 +347,14 @@ class TrainViewModel(
                         availableCharacters = activePool,
                         currentChallengeIndex = currentState.currentChallengeIndex + 1,
                         targetCharacter = nextTarget,
-                        sessionTotalAttempts = newTotalAttempts,
-                        sessionCorrectAttempts = newCorrectAttempts,
-                        sessionAccuracy = newAccuracy,
-                        lastGuessedCharacter = guessedCharacter,
-                        lastGuessWasCorrect = isCorrect,
-                        feedbackMessage = if (isCorrect) "Correct! Target was '$target'" else "Incorrect. Target was '$target', you guessed '$guessedCharacter'",
-                        levelUpMessage = levelUpMsg ?: currentState.levelUpMessage,
-                        masteredCharacters = updatedMastered,
-                        sessionCharacterAttempts = sessionCharacterAttempts.toMap(),
+                        lastGuessedCharacter = null,
+                        lastGuessWasCorrect = null,
+                        feedbackMessage = null,
+                        drillState = DrillState.DrillActive,
                         isReplayTone = false
                     )
                 }
+                playTone()
             }
         }
     }
@@ -369,9 +382,10 @@ class TrainViewModel(
             val level = _uiState.value.activeKochLevel
             sessionCharacterAttempts.clear()
             val nextTarget = pickNextTarget(profile.id, level)
+            val isSessionActive = _uiState.value.drillState == DrillState.DrillActive || _uiState.value.drillState == DrillState.ShowingResult
             _uiState.update {
                 it.copy(
-                    currentChallengeIndex = if (it.isSessionActive) 1 else 0,
+                    currentChallengeIndex = if (isSessionActive) 1 else 0,
                     sessionTotalAttempts = 0,
                     sessionCorrectAttempts = 0,
                     sessionAccuracy = 0.0f,
@@ -383,6 +397,9 @@ class TrainViewModel(
                     sessionCharacterAttempts = emptyMap(),
                     isReplayTone = false
                 )
+            }
+            if (isSessionActive) {
+                playTone()
             }
         }
     }

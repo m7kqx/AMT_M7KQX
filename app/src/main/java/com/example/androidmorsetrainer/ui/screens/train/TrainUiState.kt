@@ -3,6 +3,13 @@ package com.example.androidmorsetrainer.ui.screens.train
 import androidx.compose.runtime.Immutable
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
 
+enum class DrillState {
+    DrillSetup,
+    DrillActive,
+    ShowingResult,
+    Finished
+}
+
 /**
  * UI State representing the interactive Koch Train Screen.
  * Immutability annotation helps Jetpack Compose optimize recomposition passes on high-refresh screens.
@@ -13,13 +20,12 @@ data class TrainUiState(
     val activeKochLevel: Int = 1,
     val availableCharacters: List<String> = emptyList(),
     val targetCharacter: String = "",
+    val drillState: DrillState = DrillState.DrillSetup,
     val isPlayingAudio: Boolean = false,
     val isReplayTone: Boolean = false,
     val selectedDrillLength: Int = 20,
     val sessionBatchSize: Int = 20,
     val currentChallengeIndex: Int = 0,
-    val isSessionActive: Boolean = false,
-    val isSessionFinished: Boolean = false,
     val sessionTotalAttempts: Int = 0,
     val sessionCorrectAttempts: Int = 0,
     val sessionAccuracy: Float = 0.0f,

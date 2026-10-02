@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.cos
@@ -85,6 +86,8 @@ open class MorseAudioGenerator(
         Log.d(TAG, "AudioTrack initialized: sampleRate=$sampleRate, frequency=$frequencyHz, bufferSize=$bufferSize")
     }
 
+    private var currentPhase: Double = 0.0
+
     /**
      * Synthesizes a sine wave PCM buffer of specified duration with raised-cosine (Hann) envelope
      * on the leading and trailing edges to prevent click artifacts.
@@ -99,11 +102,15 @@ open class MorseAudioGenerator(
         )
 
         val twoPiF = 2.0 * Math.PI * freq
+        val phaseIncrement = twoPiF / sampleRate
         val maxAmp = (Short.MAX_VALUE * AMPLITUDE_FACTOR).toInt()
 
         for (i in 0 until totalSamples) {
-            val t = i.toDouble() / sampleRate
-            val sineVal = sin(twoPiF * t)
+            val sineVal = sin(currentPhase)
+            currentPhase += phaseIncrement
+            if (currentPhase >= 2.0 * Math.PI) {
+                currentPhase -= 2.0 * Math.PI
+            }
 
             // Hann / Raised Cosine window for smooth attack and decay
             val envelope = when {
@@ -128,6 +135,8 @@ open class MorseAudioGenerator(
      */
     fun generateSilenceBuffer(durationMs: Long): ShortArray {
         val totalSamples = ((sampleRate * durationMs) / 1000.0).toInt().coerceAtLeast(1)
+        val phaseIncrement = 2.0 * Math.PI * frequencyHz / sampleRate
+        currentPhase = (currentPhase + phaseIncrement * totalSamples) % (2.0 * Math.PI)
         return ShortArray(totalSamples)
     }
 
@@ -186,21 +195,34 @@ open class MorseAudioGenerator(
         }
     }
 
+    private val playbackMutex = kotlinx.coroutines.sync.Mutex()
+
     /**
      * Plays a character or prosign (e.g. "K", "A", or "<BT>").
      */
     open suspend fun playCharacter(character: String) = withContext(defaultDispatcher) {
-        isStopping.set(false)
-        _isPlaying.value = true
-        try {
-            val pattern = MorseConstants.MORSE_MAP[character.uppercase()]
-            if (pattern != null) {
-                playMorsePattern(pattern)
-            } else if (character == " ") {
-                playSilence(MorseConstants.calculateWordSpaceMs(wpm, farnsworthWpm))
+        playbackMutex.withLock {
+            stop()
+            isStopping.set(false)
+            _isPlaying.value = true
+            currentPhase = 0.0
+            try {
+                playCharacterInternal(character)
+                // Pad with silence to guarantee we exceed minBufferSize, forcing immediate hardware playback
+                // and ensuring the coroutine blocks until the tone has physically rendered.
+                playSilence(400)
+            } finally {
+                _isPlaying.value = false
             }
-        } finally {
-            _isPlaying.value = false
+        }
+    }
+
+    private suspend fun playCharacterInternal(character: String) {
+        val pattern = MorseConstants.MORSE_MAP[character.uppercase()]
+        if (pattern != null) {
+            playMorsePattern(pattern)
+        } else if (character == " ") {
+            playSilence(MorseConstants.calculateWordSpaceMs(wpm, farnsworthWpm))
         }
     }
 
@@ -212,31 +234,39 @@ open class MorseAudioGenerator(
         characters: List<String>,
         onCharacterPlayed: ((String) -> Unit)? = null
     ) = withContext(defaultDispatcher) {
-        isStopping.set(false)
-        _isPlaying.value = true
+        playbackMutex.withLock {
+            stop()
+            isStopping.set(false)
+            _isPlaying.value = true
+            currentPhase = 0.0
 
-        try {
-            val charSpace = MorseConstants.calculateCharacterSpaceMs(wpm, farnsworthWpm)
-            val wordSpace = MorseConstants.calculateWordSpaceMs(wpm, farnsworthWpm)
+            try {
+                val charSpace = MorseConstants.calculateCharacterSpaceMs(wpm, farnsworthWpm)
+                val wordSpace = MorseConstants.calculateWordSpaceMs(wpm, farnsworthWpm)
 
-            for (i in characters.indices) {
-                if (isStopping.get() || !isActive) break
+                for (i in characters.indices) {
+                    if (isStopping.get() || !isActive) break
 
-                val char = characters[i]
-                if (char == " ") {
-                    playSilence(wordSpace)
-                    continue
+                    val char = characters[i]
+                    if (char == " ") {
+                        playSilence(wordSpace)
+                        continue
+                    }
+
+                    onCharacterPlayed?.invoke(char)
+                    playCharacterInternal(char)
+
+                    if (i < characters.size - 1 && characters[i + 1] != " ") {
+                        playSilence(charSpace)
+                    }
                 }
-
-                onCharacterPlayed?.invoke(char)
-                playCharacter(char)
-
-                if (i < characters.size - 1 && characters[i + 1] != " ") {
-                    playSilence(charSpace)
+                if (!isStopping.get() && isActive) {
+                    // Pad with silence to guarantee we exceed minBufferSize, forcing immediate hardware playback
+                    playSilence(400)
                 }
+            } finally {
+                _isPlaying.value = false
             }
-        } finally {
-            _isPlaying.value = false
         }
     }
 
