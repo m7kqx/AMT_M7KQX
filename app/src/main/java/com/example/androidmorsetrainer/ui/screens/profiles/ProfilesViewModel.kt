@@ -148,6 +148,23 @@ class ProfilesViewModel(
         _uiState.update { it.copy(errorMessage = null) }
     }
 
+    fun updateProfileKochLevel(profileId: Long, level: Int) {
+        viewModelScope.launch {
+            try {
+                profileRepository.updateProfileKochLevel(profileId, level)
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(errorMessage = "Failed to update Koch level: ${e.localizedMessage ?: "Unknown error"}")
+                }
+            }
+        }
+    }
+
+    fun updateActiveProfileKochLevel(level: Int) {
+        val activeId = _uiState.value.activeProfileId ?: return
+        updateProfileKochLevel(activeId, level)
+    }
+
     companion object {
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {

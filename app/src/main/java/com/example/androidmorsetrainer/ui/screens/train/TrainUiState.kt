@@ -18,6 +18,7 @@ enum class DrillState {
 data class TrainUiState(
     val activeProfile: UserProfile? = null,
     val activeKochLevel: Int = 1,
+    val currentWpm: Int = 20,
     val availableCharacters: List<String> = emptyList(),
     val targetCharacter: String = "",
     val drillState: DrillState = DrillState.DrillSetup,
@@ -36,8 +37,34 @@ data class TrainUiState(
     val masteredCharacters: Set<String> = emptySet(),
     val sessionCharacterAttempts: Map<String, Int> = emptyMap(),
     val isLoading: Boolean = false,
-    val showStartLessonDialog: Boolean = false
+    val showStartLessonDialog: Boolean = false,
+    val overallAccuracy: Int = 0,
+    val lastDrillAccuracy: Int = 0,
+    val newlyIntroducedCharacter: String? = null,
+    val newCharacterDotRepresentation: String? = null,
+    val activeHintCharacter: String? = newlyIntroducedCharacter,
+    val activeHintDotRep: String? = newCharacterDotRepresentation,
+    val newCharacterVisualAid: String? = if (newlyIntroducedCharacter != null && newCharacterDotRepresentation != null) {
+        "$newlyIntroducedCharacter $newCharacterDotRepresentation"
+    } else if (activeHintCharacter != null && activeHintDotRep != null) {
+        "$activeHintCharacter $activeHintDotRep"
+    } else null,
+    val isVisualAidActive: Boolean = false,
+    val showNewCharacterVisualAid: Boolean = false,
+    val activeNewCharacterSuccessCount: Int = 0,
+    val newCharacterSuccessCount: Int = activeNewCharacterSuccessCount,
+    val characterSuccessCounts: Map<String, Int> = emptyMap(),
+    val characterAccuracies: Map<String, Float> = emptyMap()
 ) {
+    val activeNewCharacter: String?
+        get() = newlyIntroducedCharacter ?: activeHintCharacter
+
+    val visualAidText: String?
+        get() = if (!isVisualAidActive || !showNewCharacterVisualAid) {
+            null
+        } else if (activeHintCharacter != null && activeHintDotRep != null) {
+            "$activeHintCharacter $activeHintDotRep"
+        } else newCharacterVisualAid
     val hasTarget: Boolean
         get() = targetCharacter.isNotEmpty()
 
@@ -48,4 +75,10 @@ data class TrainUiState(
         get() = if (sessionBatchSize > 0) {
             (currentChallengeIndex.coerceAtLeast(1) - 1).toFloat() / sessionBatchSize
         } else 0f
+
+    val isSessionActive: Boolean
+        get() = drillState == DrillState.DrillActive || drillState == DrillState.ShowingResult
+
+    val isSessionFinished: Boolean
+        get() = drillState == DrillState.Finished
 }

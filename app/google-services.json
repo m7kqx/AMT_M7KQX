@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "54823952497",
+    "project_id": "boot-camp-testing",
+    "storage_bucket": "boot-camp-testing.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:54823952497:android:530f391cce3be7897d7bd0",
+        "android_client_info": {
+          "package_name": "uk.co.m7kqx.cwbootcamp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDvu97zLKlTtigy4yrfV9Nshl6hbbhqcZM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

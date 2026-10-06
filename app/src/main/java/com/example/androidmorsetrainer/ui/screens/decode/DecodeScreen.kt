@@ -61,7 +61,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -98,13 +97,6 @@ fun DecodeScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         viewModel.onPermissionResult(isGranted)
-    }
-
-    // Auto-pause when user navigates away from this tab
-    DisposableEffect(Unit) {
-        onDispose {
-            viewModel.stopListening()
-        }
     }
 
     DecodeScreenContent(

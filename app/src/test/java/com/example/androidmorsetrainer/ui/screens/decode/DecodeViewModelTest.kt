@@ -274,4 +274,65 @@ class DecodeViewModelTest {
         assertNotNull(viewModel.uiState.value.userMessage)
         assertTrue(viewModel.uiState.value.userMessage!!.contains("No distinct CW tone found"))
     }
+
+    @Test
+    fun isDecoding_tracksListeningState() = runTest(testDispatcher) {
+        assertFalse(viewModel.isDecoding.value)
+        assertFalse(viewModel.uiState.value.isDecoding)
+
+        viewModel.startListening()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.isDecoding.value)
+        assertTrue(viewModel.uiState.value.isDecoding)
+        assertTrue(viewModel.uiState.value.isListening)
+
+        viewModel.stopListening()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.isDecoding.value)
+        assertFalse(viewModel.uiState.value.isDecoding)
+        assertFalse(viewModel.uiState.value.isListening)
+    }
+
+    @Test
+    fun activeDspManager_preservedAndAccessible() {
+        assertEquals(fakeDspManager, viewModel.activeDspManager)
+        assertEquals(fakeDspManager, viewModel.dspManager)
+    }
+
+    @Test
+    fun initialization_preservesActiveDspManagerState() = runTest(testDispatcher) {
+        // Given an active DSP manager already capturing audio
+        fakeDspManager.startListening()
+        assertTrue(fakeDspManager.dspState.value.isListening)
+
+        // When a new ViewModel is created with the active manager (e.g. Activity recreation)
+        val newViewModel = DecodeViewModel(
+            dspManager = fakeDspManager,
+            defaultDispatcher = testDispatcher
+        )
+
+        // Then isDecoding and isListening are preserved as active
+        assertTrue(newViewModel.isDecoding.value)
+        assertTrue(newViewModel.uiState.value.isDecoding)
+        assertTrue(newViewModel.uiState.value.isListening)
+        assertEquals(fakeDspManager, newViewModel.activeDspManager)
+    }
+
+    @Test
+    fun onCleared_releasesDspAudioResources() = runTest(testDispatcher) {
+        viewModel.startListening()
+        advanceUntilIdle()
+        assertTrue(fakeDspManager.isListeningStarted)
+
+        // Simulating ViewModel clearance when user definitively leaves/exits screen
+        viewModel.onCleared()
+        advanceUntilIdle()
+
+        assertTrue(fakeDspManager.isListeningStopped)
+        assertFalse(viewModel.isDecoding.value)
+        assertFalse(viewModel.uiState.value.isListening)
+    }
 }
+

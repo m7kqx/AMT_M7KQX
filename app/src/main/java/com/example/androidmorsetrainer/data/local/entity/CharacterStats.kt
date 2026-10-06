@@ -41,5 +41,17 @@ data class CharacterStats(
     val incorrectCount: Int = 0,
 
     @ColumnInfo(name = "priority_weight")
-    val priorityWeight: Float = 1.0f
-)
+    val priorityWeight: Float = 1.0f,
+
+    @ColumnInfo(name = "successful_challenges", defaultValue = "0")
+    val successfulChallenges: Int = correctCount
+) {
+    val totalAttempts: Int
+        get() = correctCount + incorrectCount
+
+    val accuracyPercentage: Float
+        get() = if (totalAttempts > 0) (correctCount.toFloat() / totalAttempts) * 100.0f else 0.0f
+
+    val isHintThresholdMet: Boolean
+        get() = successfulChallenges >= 6
+}

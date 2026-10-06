@@ -27,7 +27,7 @@ import kotlin.math.sqrt
  * raw amplitude visualization stream, and CW live Morse decoding.
  */
 class DecodeViewModel(
-    private val dspManager: MorseDSPManager,
+    val dspManager: MorseDSPManager,
     private val fftAnalyzer: FFTAnalyzer = FFTAnalyzer(),
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : ViewModel() {
@@ -46,10 +46,18 @@ class DecodeViewModel(
         }
     }
 
+    val activeDspManager: MorseDSPManager
+        get() = dspManager
+
     private val decoder = CwDecoder(initialWpm = 20, scope = viewModelScope)
+
+    private val _isDecoding = MutableStateFlow(dspManager.dspState.value.isListening)
+    val isDecoding: StateFlow<Boolean> = _isDecoding.asStateFlow()
 
     private val _uiState = MutableStateFlow(
         DecodeUiState(
+            isListening = dspManager.dspState.value.isListening,
+            isDecoding = dspManager.dspState.value.isListening,
             hasRecordPermission = dspManager.hasRecordPermission(),
             targetFrequencyHz = dspManager.targetFrequencyHz,
             detectionThreshold = dspManager.squelchThreshold,
@@ -88,9 +96,11 @@ class DecodeViewModel(
                 val level = MorseDSPManager.magnitudeToSquelchLevel(dsp.detectionThreshold)
                 _isToneDetected.value = dsp.isTonePresent
                 _squelchLevel.value = level
+                _isDecoding.value = dsp.isListening
                 _uiState.update {
                     it.copy(
                         isListening = dsp.isListening,
+                        isDecoding = dsp.isListening,
                         isCalibrating = dsp.isCalibrating,
                         isTonePresent = dsp.isTonePresent,
                         currentMagnitude = dsp.currentMagnitude,
@@ -388,7 +398,7 @@ class DecodeViewModel(
         _uiState.update { it.copy(userMessage = null) }
     }
 
-    override fun onCleared() {
+    public override fun onCleared() {
         super.onCleared()
         dspManager.stopListening()
     }

@@ -15,6 +15,8 @@ interface ProfileRepository {
     suspend fun getProfileById(id: Long): UserProfile?
     suspend fun createProfile(name: String): Long
     suspend fun updateProfile(profile: UserProfile)
+    suspend fun updateProfileKochLevel(profileId: Long, kochLevel: Int)
+    suspend fun updateKochLevel(profileId: Long, level: Int) = updateProfileKochLevel(profileId, level)
     suspend fun deleteProfile(profile: UserProfile)
     suspend fun deleteProfileById(id: Long)
     suspend fun getStatsForProfile(profileId: Long): List<CharacterStats>
@@ -50,6 +52,13 @@ class ProfileRepositoryImpl(
 
     override suspend fun updateProfile(profile: UserProfile) = withContext(ioDispatcher) {
         userProfileDao.updateProfile(profile)
+    }
+
+    override suspend fun updateProfileKochLevel(profileId: Long, kochLevel: Int): Unit = withContext(ioDispatcher) {
+        val profile = userProfileDao.getProfileById(profileId)
+        if (profile != null) {
+            userProfileDao.updateProfile(profile.copy(currentKochLevel = kochLevel))
+        }
     }
 
     override suspend fun deleteProfile(profile: UserProfile) = withContext(ioDispatcher) {

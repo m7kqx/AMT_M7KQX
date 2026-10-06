@@ -16,16 +16,13 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -35,7 +32,6 @@ import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EmojiEvents
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.AlertDialog
@@ -44,6 +40,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -51,18 +51,23 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -78,7 +83,7 @@ fun TrainScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    LaunchedEffect(activeProfile?.id, activeProfile?.currentKochLevel) {
+    LaunchedEffect(activeProfile?.id) {
         viewModel.setActiveProfile(activeProfile)
     }
 
@@ -91,6 +96,7 @@ fun TrainScreen(
                     uiState = uiState,
                     profileName = activeProfile.name,
                     onSelectDrillLength = viewModel::setDrillLength,
+                    onSelectWpm = viewModel::setWpm,
                     onStartDrill = { viewModel.startLesson(uiState.selectedDrillLength) },
                     modifier = modifier
                 )
@@ -109,9 +115,10 @@ fun TrainScreen(
                     uiState = uiState,
                     onPlayTone = viewModel::playTone,
                     onGuess = viewModel::submitGuess,
-                    onResetSession = viewModel::resetSession,
+                    onQuitDrill = viewModel::quitDrill,
                     onDismissLevelUpMessage = viewModel::dismissLevelUpMessage,
                     onStartLesson = viewModel::startLesson,
+                    onSetWpm = viewModel::setWpm,
                     modifier = modifier
                 )
             }
@@ -129,6 +136,7 @@ private fun TrainPreDrillSetupContent(
     uiState: TrainUiState,
     profileName: String,
     onSelectDrillLength: (Int) -> Unit,
+    onSelectWpm: (Int) -> Unit,
     onStartDrill: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -292,7 +300,42 @@ private fun TrainPreDrillSetupContent(
             }
         }
 
-        // 3. Drill Objectives & Information Card
+        // 3. Playback Speed (WPM) Configuration Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "PLAYBACK SPEED (WPM)",
+                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Scales Paris timing speed (10 to 25 WPM)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                WpmDropdownSelector(
+                    currentWpm = uiState.currentWpm,
+                    onWpmChange = onSelectWpm,
+                    modifier = Modifier.width(135.dp)
+                )
+            }
+        }
+
+        // 4. Drill Objectives & Information Card
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -446,10 +489,18 @@ private fun TrainDrillSummaryContent(
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
                     ScoreMetricTile(
-                        title = "Accuracy",
-                        value = uiState.accuracyFormatted,
+                        title = "Drill Accuracy",
+                        value = "${uiState.lastDrillAccuracy}%",
                         valueColor = when {
-                            uiState.sessionAccuracy >= 70.0f -> Color(0xFF10B981)
+                            uiState.lastDrillAccuracy >= 70 -> Color(0xFF10B981)
+                            else -> MaterialTheme.colorScheme.error
+                        }
+                    )
+                    ScoreMetricTile(
+                        title = "Overall Accuracy",
+                        value = "${uiState.overallAccuracy}%",
+                        valueColor = when {
+                            uiState.overallAccuracy >= 70 -> Color(0xFF10B981)
                             else -> MaterialTheme.colorScheme.error
                         }
                     )
@@ -463,6 +514,43 @@ private fun TrainDrillSummaryContent(
                         value = "${uiState.activeKochLevel}",
                         valueColor = MaterialTheme.colorScheme.primary
                     )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Career Koch Accuracy",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Cumulative across all practiced characters",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            text = "${uiState.overallAccuracy}%",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (uiState.overallAccuracy >= 70) Color(0xFF10B981) else MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
         }
@@ -553,172 +641,149 @@ private fun NoProfileScreen(modifier: Modifier = Modifier) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TrainScreenContent(
     uiState: TrainUiState,
     onPlayTone: () -> Unit,
     onGuess: (String) -> Unit,
-    onResetSession: () -> Unit,
+    onQuitDrill: () -> Unit,
     onDismissLevelUpMessage: () -> Unit,
     onStartLesson: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onResetSession: () -> Unit = onQuitDrill,
+    onBackspace: () -> Unit = {},
+    onSetWpm: (Int) -> Unit = {}
 ) {
-    // Dynamic grid scaling: cleanly balances small character pools (Level 1-3)
-    // while scaling adaptively on modern high-resolution displays.
-    val gridColumns = when {
-        uiState.availableCharacters.size <= 2 -> GridCells.Fixed(2)
-        uiState.availableCharacters.size == 3 -> GridCells.Fixed(3)
-        uiState.availableCharacters.size == 4 -> GridCells.Fixed(4)
-        else -> GridCells.Adaptive(minSize = 64.dp)
-    }
-
-    LazyVerticalGrid(
-        columns = gridColumns,
+    Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        if (uiState.drillState == DrillState.DrillSetup) {
-            // 1. Session Progress Banner ("Challenge 5/20")
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Challenge ${uiState.currentChallengeIndex} of ${uiState.sessionBatchSize}",
-                                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "Accuracy: ${uiState.accuracyFormatted}",
-                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        LinearProgressIndicator(
-                            progress = { uiState.progressFraction },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                        )
-                    }
-                }
-            }
-
-            // 2. Active Koch Level visual indicator and progression
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                KochLevelHeader(
-                    activeLevel = uiState.activeKochLevel,
-                    profileName = uiState.activeProfile?.name.orEmpty(),
-                    availableCharacters = uiState.availableCharacters
-                )
-            }
-        }
-
-        // 3. Celebratory Level-Up Banner (if triggered)
-        if (uiState.levelUpMessage != null) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
+        // Upper Information Section (compact, scrollable if height is constrained)
+        val scrollState = rememberScrollState()
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // 1. Celebratory Level-Up Banner (if triggered)
+            if (uiState.levelUpMessage != null) {
                 LevelUpBanner(
                     message = uiState.levelUpMessage,
                     onDismiss = onDismissLevelUpMessage
                 )
             }
-        }
 
-        // 4. Real-Time Score & Accuracy Feedback
-        item(span = { GridItemSpan(maxLineSpan) }) {
+            // 2. Real-Time Score & Accuracy Feedback (Horizontal compact layout)
             ScoreFeedbackCard(
                 accuracy = uiState.sessionAccuracy,
                 accuracyFormatted = uiState.accuracyFormatted,
                 correctCount = uiState.sessionCorrectAttempts,
                 totalCount = uiState.sessionTotalAttempts,
                 minAttempts = uiState.sessionBatchSize,
-                onResetSession = onResetSession
+                onQuitDrill = onQuitDrill,
+                challengeIndex = uiState.currentChallengeIndex,
+                batchSize = uiState.sessionBatchSize,
+                progressFraction = uiState.progressFraction
             )
-        }
 
-        // 5. Last Guess Outcome Feedback Banner
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Box(
+            // 3. Last Guess Outcome Feedback Banner (Horizontal compact layout)
+            if (uiState.lastGuessWasCorrect != null && uiState.feedbackMessage != null) {
+                GuessFeedbackBanner(
+                    isCorrect = uiState.lastGuessWasCorrect,
+                    message = uiState.feedbackMessage
+                )
+            }
+
+            // 4. Active Character Prompt & WPM Speed Selector
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(64.dp), // Fixed height to prevent UI shifting
-                contentAlignment = Alignment.Center
+                    .padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                if (uiState.lastGuessWasCorrect != null && uiState.feedbackMessage != null) {
-                    GuessFeedbackBanner(
-                        isCorrect = uiState.lastGuessWasCorrect,
-                        message = uiState.feedbackMessage
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Select What You Heard",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                        if (uiState.isPlayingAudio) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Active characters for Koch Level ${uiState.activeKochLevel}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
+                Spacer(modifier = Modifier.width(12.dp))
+                WpmDropdownSelector(
+                    currentWpm = uiState.currentWpm,
+                    onWpmChange = onSetWpm,
+                    enabled = !uiState.isPlayingAudio,
+                    modifier = Modifier.width(135.dp)
+                )
+            }
+
+            // 5. Dynamic Visual Aid for Newly Introduced Character (Large Morse dot representation)
+            val visualAidText = uiState.visualAidText
+
+            AnimatedVisibility(
+                visible = uiState.isVisualAidActive && uiState.showNewCharacterVisualAid && !visualAidText.isNullOrEmpty(),
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Text(
+                    text = visualAidText ?: "",
+                    style = MaterialTheme.typography.displayMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                )
             }
         }
 
-        // 6. Large "Play Tone" Button
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            PlayToneButton(
-                isPlaying = uiState.isPlayingAudio,
-                drillState = uiState.drillState,
-                onClick = if (uiState.drillState == DrillState.DrillSetup) onStartLesson else onPlayTone
+        // 5. Custom In-App Koch Keyboard anchored to bottom of viewable area
+        Crossfade(
+            targetState = uiState.targetCharacter,
+            animationSpec = tween(durationMillis = 250),
+            label = "challengeTransition",
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 2.dp)
+        ) { _ ->
+            KochKeyboard(
+                currentKochLevel = uiState.activeKochLevel,
+                onCharacterClick = onGuess,
+                onRepeatClick = onPlayTone,
+                enabled = uiState.hasTarget && uiState.drillState == DrillState.DrillActive,
+                lastGuessedCharacter = uiState.lastGuessedCharacter,
+                lastGuessWasCorrect = uiState.lastGuessWasCorrect,
+                modifier = Modifier.fillMaxWidth()
             )
-        }
-
-        // 7. Answer Grid Section Title
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Column(modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)) {
-                Text(
-                    text = "Select What You Heard",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Active characters for Koch Level ${uiState.activeKochLevel}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        // 8. Dynamic Grid of Answer Buttons with Crossfade animation on challenge state change
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Crossfade(
-                targetState = uiState.targetCharacter,
-                animationSpec = tween(durationMillis = 250),
-                label = "challengeTransition"
-            ) { _ ->
-                AnswerGrid(
-                    availableCharacters = uiState.availableCharacters,
-                    lastGuessedCharacter = uiState.lastGuessedCharacter,
-                    lastGuessWasCorrect = uiState.lastGuessWasCorrect,
-                    masteredCharacters = uiState.masteredCharacters,
-                    hasTarget = uiState.hasTarget,
-                    drillState = uiState.drillState,
-                    onGuess = onGuess
-                )
-            }
         }
     }
 }
@@ -880,41 +945,62 @@ private fun KochLevelHeader(
 @Composable
 private fun LevelUpBanner(
     message: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    durationMs: Long = 4000L
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        ),
-        shape = RoundedCornerShape(14.dp)
+    // Transient auto-dismissal: automatically dismisses without requiring a manual click
+    LaunchedEffect(message) {
+        kotlinx.coroutines.delay(durationMs)
+        onDismiss()
+    }
+
+    AnimatedVisibility(
+        visible = true,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+        modifier = modifier
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            ),
+            shape = RoundedCornerShape(12.dp)
         ) {
-            Icon(
-                imageVector = Icons.Default.EmojiEvents,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = onDismiss) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Dismiss",
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    imageVector = Icons.Default.EmojiEvents,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
                 )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }
@@ -927,51 +1013,80 @@ private fun ScoreFeedbackCard(
     correctCount: Int,
     totalCount: Int,
     minAttempts: Int,
-    onResetSession: () -> Unit
+    onQuitDrill: () -> Unit,
+    modifier: Modifier = Modifier,
+    challengeIndex: Int = 0,
+    batchSize: Int = 0,
+    progressFraction: Float = 0f
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         ),
-        shape = RoundedCornerShape(18.dp)
+        shape = RoundedCornerShape(14.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(18.dp)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
+            // Header Row: Session title / Challenge progress & Quit Drill button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Session Score",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
+                Column {
+                    Text(
+                        text = "Session Score",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                    if (batchSize > 0 && challengeIndex > 0) {
+                        Text(
+                            text = "Challenge $challengeIndex of $batchSize",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
+
                 TextButton(
-                    onClick = onResetSession,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    onClick = onQuitDrill,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Reset Session",
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Quit Drill",
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = "Reset", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        text = "Quit Drill",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            // Metrics Row: Horizontally spaced metrics with explicit minWidth and single-line constraints
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Metric 1: Accuracy %
                 ScoreMetricTile(
                     title = "Accuracy",
                     value = accuracyFormatted,
@@ -980,25 +1095,36 @@ private fun ScoreFeedbackCard(
                         accuracy >= 90.0f -> Color(0xFF10B981) // Emerald
                         accuracy >= 70.0f -> Color(0xFFF59E0B) // Amber
                         else -> MaterialTheme.colorScheme.error
-                    }
+                    },
+                    modifier = Modifier.defaultMinSize(minWidth = 76.dp)
                 )
-
-                // Metric 2: Score Ratio
                 ScoreMetricTile(
                     title = "Score",
                     value = "$correctCount / $totalCount",
-                    valueColor = MaterialTheme.colorScheme.onSurface
+                    valueColor = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.defaultMinSize(minWidth = 76.dp)
                 )
-
-                // Metric 3: Promotion Threshold
                 ScoreMetricTile(
                     title = "Target",
                     value = "≥ 90%",
-                    valueColor = MaterialTheme.colorScheme.primary
+                    valueColor = Color(0xFF10B981),
+                    modifier = Modifier.defaultMinSize(minWidth = 76.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            if (batchSize > 0) {
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { progressFraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
 
             // Level-up progress helper
             val attemptsRemaining = (minAttempts - totalCount).coerceAtLeast(0)
@@ -1015,7 +1141,10 @@ private fun ScoreFeedbackCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -1025,20 +1154,30 @@ private fun ScoreFeedbackCard(
 private fun ScoreMetricTile(
     title: String,
     value: String,
-    valueColor: Color
+    valueColor: Color,
+    modifier: Modifier = Modifier
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .defaultMinSize(minWidth = 72.dp)
+            .padding(horizontal = 4.dp)
+    ) {
         Text(
             text = title,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            softWrap = false
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace),
             fontWeight = FontWeight.Bold,
-            color = valueColor
+            color = valueColor,
+            maxLines = 1,
+            softWrap = false
         )
     }
 }
@@ -1046,19 +1185,21 @@ private fun ScoreMetricTile(
 @Composable
 private fun GuessFeedbackBanner(
     isCorrect: Boolean,
-    message: String
+    message: String,
+    modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
         visible = true,
         enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically()
+        exit = fadeOut() + shrinkVertically(),
+        modifier = modifier
     ) {
         val backgroundColor = if (isCorrect) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
         val contentColor = if (isCorrect) Color(0xFF1B5E20) else Color(0xFFB71C1C)
         val icon = if (isCorrect) Icons.Default.CheckCircle else Icons.Default.Cancel
 
         Surface(
-            shape = RoundedCornerShape(14.dp),
+            shape = RoundedCornerShape(10.dp),
             color = backgroundColor,
             border = BorderStroke(1.dp, contentColor.copy(alpha = 0.35f)),
             modifier = Modifier.fillMaxWidth()
@@ -1066,90 +1207,79 @@ private fun GuessFeedbackBanner(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
                     tint = contentColor,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(18.dp)
                 )
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = message,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = contentColor
+                    color = contentColor,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
     }
 }
 
+/**
+ * Material 3 Exposed Dropdown Menu for dynamic Words Per Minute (WPM) selection (10 to 25 WPM).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PlayToneButton(
-    isPlaying: Boolean,
-    drillState: DrillState,
-    onClick: () -> Unit
+fun WpmDropdownSelector(
+    currentWpm: Int,
+    onWpmChange: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
-    Button(
-        onClick = onClick,
-        enabled = if (drillState != DrillState.DrillSetup) !isPlaying else true,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(64.dp),
-        shape = RoundedCornerShape(18.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.primary,
-            disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-        ),
-        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+    var expanded by remember { mutableStateOf(false) }
+    val wpmOptions = remember { (10..25).toList() }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = !expanded },
+        modifier = modifier
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
+        OutlinedTextField(
+            value = "$currentWpm WPM",
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            label = { Text("Speed", style = MaterialTheme.typography.labelSmall) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.menuAnchor(),
+            textStyle = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp)
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
         ) {
-            if (isPlaying) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    strokeWidth = 2.5.dp
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = "Playing Morse Tone...",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
-            } else if (drillState == DrillState.DrillSetup) {
-                Icon(
-                    imageVector = Icons.Default.School,
-                    contentDescription = null,
-                    modifier = Modifier.size(28.dp),
-                    tint = MaterialTheme.colorScheme.onPrimary
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = "Start Drill",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.GraphicEq,
-                    contentDescription = null,
-                    modifier = Modifier.size(28.dp),
-                    tint = MaterialTheme.colorScheme.onPrimary
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = "Repeat Tone",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimary
+            wpmOptions.forEach { wpm ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = "$wpm WPM",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (wpm == currentWpm) FontWeight.Bold else FontWeight.Normal,
+                            color = if (wpm == currentWpm) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    onClick = {
+                        onWpmChange(wpm)
+                        expanded = false
+                    }
                 )
             }
         }

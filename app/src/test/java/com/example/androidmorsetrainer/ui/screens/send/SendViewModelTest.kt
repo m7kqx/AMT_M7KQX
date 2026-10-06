@@ -104,6 +104,12 @@ class FakeProfileRepository : ProfileRepository {
         characterStatsMap.keys.removeAll { it.first == id }
     }
 
+    override suspend fun updateProfileKochLevel(profileId: Long, kochLevel: Int) {
+        profilesFlow.update { list ->
+            list.map { if (it.id == profileId) it.copy(currentKochLevel = kochLevel) else it }
+        }
+    }
+
     override suspend fun getStatsForProfile(profileId: Long): List<CharacterStats> {
         return characterStatsMap.filter { it.key.first == profileId }.values.toList()
     }

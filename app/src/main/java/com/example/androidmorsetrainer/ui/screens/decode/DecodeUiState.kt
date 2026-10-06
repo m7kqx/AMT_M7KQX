@@ -18,6 +18,7 @@ data class AmplitudePoint(
 @Immutable
 data class DecodeUiState(
     val isListening: Boolean = false,
+    val isDecoding: Boolean = isListening,
     val isCalibrating: Boolean = false,
     val isAutoTuning: Boolean = false,
     val autoTunedFrequencyHz: Double? = null,

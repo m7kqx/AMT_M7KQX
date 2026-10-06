@@ -26,10 +26,13 @@ import kotlin.math.sin
 open class MorseAudioGenerator(
     val sampleRate: Int = 44100,
     var frequencyHz: Int = 700,
-    var wpm: Int = 20,
+    wpm: Int = 20,
     var farnsworthWpm: Int? = null,
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) {
+    private var _wpm: Int = wpm
+    val wpm: Int
+        get() = _wpm
 
     companion object {
         private const val TAG = "MorseAudioGenerator"
@@ -196,6 +199,26 @@ open class MorseAudioGenerator(
     }
 
     private val playbackMutex = kotlinx.coroutines.sync.Mutex()
+
+    /**
+     * Updates the playback speed in Words Per Minute (WPM) dynamically.
+     * Recalculates dot, dash, and inter-character spacing durations based on standard Morse timing rules.
+     */
+    open fun setWpm(newWpm: Int) {
+        val clamped = newWpm.coerceIn(10, 25)
+        if (this._wpm != clamped) {
+            this._wpm = clamped
+            Log.d(TAG, "MorseAudioGenerator WPM set to $clamped (dit=${MorseConstants.calculateUnitDurationMs(clamped)}ms, dah=${MorseConstants.calculateDahDurationMs(clamped)}ms)")
+        }
+    }
+
+    /**
+     * Plays a character or prosign (e.g. "K", "A", or "<BT>") with optional WPM speed override.
+     */
+    open suspend fun playCharacter(character: String, speedWpm: Int?) {
+        speedWpm?.let { setWpm(it) }
+        playCharacter(character)
+    }
 
     /**
      * Plays a character or prosign (e.g. "K", "A", or "<BT>").

@@ -49,6 +49,15 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Ensure background audio capture is not forcefully terminated during transient configuration changes.
+        // Audio capture and decoding resources are strictly deferred to ViewModel lifecycle or app termination.
+        if (isFinishing) {
+            (application as? MorseTrainerApplication)?.container?.morseDSPManager?.stopListening()
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -58,7 +67,7 @@ fun MorseTrainerApp(
     trainViewModel: TrainViewModel = viewModel(factory = TrainViewModel.Factory),
     sendViewModel: SendViewModel = viewModel(factory = SendViewModel.Factory),
     decodeViewModel: DecodeViewModel = viewModel(factory = DecodeViewModel.Factory),
-    debugViewModel: com.example.androidmorsetrainer.ui.screens.debug.DebugViewModel = viewModel(factory = com.example.androidmorsetrainer.ui.screens.debug.DebugViewModel.Factory)
+    debugViewModel: com.example.androidmorsetrainer.ui.screens.debug.DebugViewModel = viewModel(factory = com.example.androidmorsetrainer.ui.screens.debug.DebugViewModel.Factory),
 ) {
     val profilesUiState by profilesViewModel.uiState.collectAsStateWithLifecycle()
     var currentTab by rememberSaveable { mutableStateOf(NavigationTab.PROFILES) }
@@ -69,7 +78,7 @@ fun MorseTrainerApp(
             CenterAlignedTopAppBar(
                 title = {
                     Column(
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Text(
                             text = when (currentTab) {
@@ -80,22 +89,22 @@ fun MorseTrainerApp(
                                 NavigationTab.DEBUG -> "Debug Mode"
                             },
                             fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleLarge
+                            style = MaterialTheme.typography.titleLarge,
                         )
-                        profilesUiState.activeProfile?.let { active ->
+                        profilesUiState.activeProfile?.let { (_, name, currentKochLevel) ->
                             if (currentTab != NavigationTab.PROFILES) {
                                 Text(
-                                    text = "Active: ${active.name} (Level ${active.currentKochLevel})",
+                                    text = "Active: $name (Level $currentKochLevel)",
                                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                                    color = MaterialTheme.colorScheme.primary
+                                    color = MaterialTheme.colorScheme.primary,
                                 )
                             }
                         }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
             )
         },
         bottomBar = {
@@ -108,14 +117,14 @@ fun MorseTrainerApp(
                         icon = {
                             Icon(
                                 imageVector = tab.icon,
-                                contentDescription = tab.contentDescription
+                                contentDescription = tab.contentDescription,
                             )
                         },
-                        label = { Text(tab.title) }
+                        label = { Text(tab.title) },
                     )
                 }
             }
-        }
+        },
     ) { innerPadding ->
         val contentModifier = Modifier.padding(innerPadding)
 
@@ -124,20 +133,20 @@ fun MorseTrainerApp(
                 TrainScreen(
                     activeProfile = profilesUiState.activeProfile,
                     viewModel = trainViewModel,
-                    modifier = contentModifier
+                    modifier = contentModifier,
                 )
             }
             NavigationTab.SEND -> {
                 SendScreen(
                     activeProfile = profilesUiState.activeProfile,
                     viewModel = sendViewModel,
-                    modifier = contentModifier
+                    modifier = contentModifier,
                 )
             }
             NavigationTab.DECODE -> {
                 DecodeScreen(
                     viewModel = decodeViewModel,
-                    modifier = contentModifier
+                    modifier = contentModifier,
                 )
             }
             NavigationTab.PROFILES -> {
@@ -153,13 +162,19 @@ fun MorseTrainerApp(
                     onSelectProfile = profilesViewModel::onSelectProfile,
                     onClearUserMessage = profilesViewModel::onClearUserMessage,
                     onClearError = profilesViewModel::onClearError,
-                    modifier = contentModifier
+                    modifier = contentModifier,
                 )
             }
             NavigationTab.DEBUG -> {
                 com.example.androidmorsetrainer.ui.screens.debug.DebugScreen(
                     viewModel = debugViewModel,
-                    modifier = contentModifier
+                    activeProfile = profilesUiState.activeProfile,
+                    onKochLevelChange = { newLevel ->
+                        profilesUiState.activeProfile?.let {
+                            debugViewModel.updateProfileKochLevel(it.id, newLevel)
+                        }
+                    },
+                    modifier = contentModifier,
                 )
             }
         }

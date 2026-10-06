@@ -23,8 +23,8 @@ android {
         applicationId = "uk.co.m7kqx.cwbootcamp"
         minSdk = 24
         targetSdk = 37
-        versionCode = 3
-        versionName = "1.0.2-beta"
+        versionCode = 5
+        versionName = "1.0.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -103,3 +103,4 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+base { archivesName.set("AndroidMorseTrainer-${android.defaultConfig.versionName}") }

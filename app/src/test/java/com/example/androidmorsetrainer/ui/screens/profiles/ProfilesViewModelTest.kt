@@ -51,6 +51,12 @@ class FakeProfileRepository : ProfileRepository {
         profilesFlow.update { list -> list.filterNot { it.id == id } }
     }
 
+    override suspend fun updateProfileKochLevel(profileId: Long, kochLevel: Int) {
+        profilesFlow.update { list ->
+            list.map { if (it.id == profileId) it.copy(currentKochLevel = kochLevel) else it }
+        }
+    }
+
     override suspend fun getStatsForProfile(profileId: Long): List<CharacterStats> = emptyList()
 
     override suspend fun getWeightedStatsForProfile(profileId: Long): List<CharacterStats> = emptyList()
@@ -161,5 +167,21 @@ class ProfilesViewModelTest {
         viewModel.onSelectProfile(targetId)
 
         assertEquals(targetId, viewModel.uiState.value.activeProfileId)
+    }
+
+    @Test
+    fun updateProfileKochLevel_updatesLevelInRepositoryAndState() = runTest(testDispatcher) {
+        advanceUntilIdle()
+
+        viewModel.onProfileNameChange("Level Test User")
+        viewModel.onAddProfile()
+        advanceUntilIdle()
+
+        val profileId = viewModel.uiState.value.profiles.first().id
+        viewModel.updateProfileKochLevel(profileId, 15)
+        advanceUntilIdle()
+
+        val updatedProfile = viewModel.uiState.value.profiles.first { it.id == profileId }
+        assertEquals(15, updatedProfile.currentKochLevel)
     }
 }
