@@ -72,6 +72,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.app.Activity
+import android.view.WindowManager
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
 import com.example.androidmorsetrainer.morse.MorseConstants
 
@@ -82,6 +86,19 @@ fun TrainScreen(
     viewModel: TrainViewModel = viewModel(factory = TrainViewModel.Factory)
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    DisposableEffect(uiState.isSessionActive) {
+        val activity = context as? Activity
+        if (uiState.isSessionActive) {
+            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     LaunchedEffect(activeProfile?.id) {
         viewModel.setActiveProfile(activeProfile)

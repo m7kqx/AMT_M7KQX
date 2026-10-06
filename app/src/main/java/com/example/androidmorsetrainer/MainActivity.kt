@@ -85,6 +85,7 @@ fun MorseTrainerApp(
                                 NavigationTab.TRAIN -> "Koch Morse Trainer"
                                 NavigationTab.SEND -> "Hardware Keying Practice"
                                 NavigationTab.DECODE -> "Morse Decoder"
+                                NavigationTab.SETUP -> "Decoder Setup"
                                 NavigationTab.PROFILES -> "User Profiles"
                                 NavigationTab.DEBUG -> "Debug Mode"
                             },
@@ -145,6 +146,12 @@ fun MorseTrainerApp(
             }
             NavigationTab.DECODE -> {
                 DecodeScreen(
+                    viewModel = decodeViewModel,
+                    modifier = contentModifier,
+                )
+            }
+            NavigationTab.SETUP -> {
+                com.example.androidmorsetrainer.ui.screens.decode.SetupScreen(
                     viewModel = decodeViewModel,
                     modifier = contentModifier,
                 )

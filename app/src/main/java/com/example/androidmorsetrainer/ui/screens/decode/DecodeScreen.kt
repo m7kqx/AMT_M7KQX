@@ -1,20 +1,10 @@
 package com.example.androidmorsetrainer.ui.screens.decode
 
 import android.Manifest
+import android.app.Activity
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -35,41 +25,34 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -92,6 +75,19 @@ fun DecodeScreen(
     viewModel: DecodeViewModel = viewModel(factory = DecodeViewModel.Factory)
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    DisposableEffect(uiState.isListening) {
+        val activity = context as? Activity
+        if (uiState.isListening) {
+            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -103,12 +99,8 @@ fun DecodeScreen(
         uiState = uiState,
         onRequestPermission = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
         onToggleListening = viewModel::toggleListening,
-        onSetFrequency = viewModel::setTargetFrequency,
-        onAutoDetectPitch = viewModel::autoDetectPitch,
-        onCalibrate = viewModel::calibrateNoiseFloor,
         onClearText = viewModel::clearDecodedText,
-        onDismissMessage = viewModel::clearUserMessage,
-        onSquelchChange = viewModel::setSquelchLevel,
+        onAutoDetectPitch = viewModel::autoDetectPitch,
         modifier = modifier
     )
 }
@@ -118,114 +110,20 @@ fun DecodeScreenContent(
     uiState: DecodeUiState,
     onRequestPermission: () -> Unit,
     onToggleListening: () -> Unit,
-    onSetFrequency: (Double) -> Unit,
-    onAutoDetectPitch: () -> Unit,
-    onCalibrate: () -> Unit,
     onClearText: () -> Unit,
-    onDismissMessage: () -> Unit,
-    onSquelchChange: (Float) -> Unit,
+    onAutoDetectPitch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val scrollState = rememberScrollState()
-
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(scrollState)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Permission Banner (if not granted)
         if (!uiState.hasRecordPermission) {
             PermissionRequiredCard(onRequestPermission = onRequestPermission)
         }
 
-        // 2. Feedback Notification Banner (Auto-Tune confirmation or info)
-        AnimatedVisibility(
-            visible = uiState.userMessage != null,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            uiState.userMessage?.let { msg ->
-                val isSuccess = uiState.autoTunedFrequencyHz != null && !uiState.isAutoTuning
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isSuccess)
-                            SdrPhosphorActive.copy(alpha = 0.15f)
-                        else
-                            MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    border = BorderStroke(
-                        width = 1.dp,
-                        color = if (isSuccess) SdrPhosphorActive else MaterialTheme.colorScheme.outlineVariant
-                    ),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            modifier = Modifier.weight(1f),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (isSuccess) Icons.Default.CheckCircle else Icons.Default.Info,
-                                contentDescription = null,
-                                tint = if (isSuccess) SdrPhosphorActive else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = msg,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        IconButton(
-                            onClick = onDismissMessage,
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Dismiss",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. High-Visibility SDR Target Frequency Detection Instrument
-        SdrTargetFrequencyPanel(
-            isTonePresent = uiState.isTonePresent,
-            isListening = uiState.isListening,
-            isAutoTuning = uiState.isAutoTuning,
-            autoTunedFrequencyHz = uiState.autoTunedFrequencyHz,
-            targetFreqHz = uiState.targetFrequencyHz,
-            magnitude = uiState.currentMagnitude,
-            spectralPurity = uiState.spectralPurity,
-            threshold = uiState.detectionThreshold,
-            noiseFloor = uiState.noiseFloor,
-            onSetFrequency = onSetFrequency
-        )
-
-        DecodeCalibrationControls(
-            isListening = uiState.isListening,
-            isCalibrating = uiState.isCalibrating,
-            isAutoTuning = uiState.isAutoTuning,
-            onCalibrate = onCalibrate,
-            onAutoDetectPitch = onAutoDetectPitch
-        )
-        
-        // 4. Dark, High-Contrast SDR Waterfall / Oscilloscope Canvas Visualizer
         SdrOscilloscopeCard(
             amplitudePoints = uiState.amplitudePoints,
             isTonePresent = uiState.isTonePresent,
@@ -235,223 +133,24 @@ fun DecodeScreenContent(
             targetFreqHz = uiState.targetFrequencyHz
         )
 
-        // 5. Dynamic Squelch Magnitude Threshold Slider Control
-        SdrSquelchControlCard(
-            squelchLevel = uiState.squelchLevel,
-            detectionThreshold = uiState.detectionThreshold,
-            onSquelchChange = onSquelchChange
-        )
-
-        // 6. Live Decoded CW Teletype Terminal
         DecodedTeletypeCard(
             decodedText = uiState.decodedText,
             currentMorseSymbol = uiState.currentMorseSymbol,
             estimatedWpm = uiState.estimatedWpm,
             isListening = uiState.isListening,
-            onClearText = onClearText
+            onClearText = onClearText,
+            modifier = Modifier.weight(1f)
         )
 
-        // 6. Controls Toolbar (Primary Receiver toggle)
         DecodeControlsToolbar(
             isListening = uiState.isListening,
-            onToggleListening = onToggleListening
+            isAutoTuning = uiState.isAutoTuning,
+            onToggleListening = onToggleListening,
+            onAutoDetectPitch = onAutoDetectPitch
         )
     }
 }
 
-/**
- * SDR Target Frequency Instrument Panel with glowing lock status and signal metrics.
- */
-@Composable
-private fun SdrTargetFrequencyPanel(
-    isTonePresent: Boolean,
-    isListening: Boolean,
-    isAutoTuning: Boolean = false,
-    autoTunedFrequencyHz: Double? = null,
-    targetFreqHz: Double,
-    magnitude: Double,
-    spectralPurity: Double,
-    threshold: Double,
-    noiseFloor: Double,
-    onSetFrequency: (Double) -> Unit
-) {
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1.0f,
-        targetValue = 1.4f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(450, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseScale"
-    )
-
-    val activeGlowColor = if (isAutoTuning) SdrPhosphorCyan else SdrPhosphorActive
-    val idleIndicatorColor = Color(0xFF64748B)
-
-    val indicatorColor by animateColorAsState(
-        targetValue = if (isTonePresent || isAutoTuning) activeGlowColor else idleIndicatorColor,
-        animationSpec = tween(100),
-        label = "indicatorColor"
-    )
-
-    val isAutoLocked = autoTunedFrequencyHz != null && targetFreqHz == autoTunedFrequencyHz
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isTonePresent) activeGlowColor.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant
-        ),
-        border = BorderStroke(
-            width = if (isTonePresent || isAutoLocked) 1.5.dp else 1.dp,
-            color = if (isTonePresent) activeGlowColor else if (isAutoLocked) SdrPhosphorActive.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant
-        ),
-        shape = RoundedCornerShape(18.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Glowing Phosphor LED Lock Indicator
-                    Box(
-                        modifier = Modifier
-                            .size(26.dp)
-                            .then(if (isTonePresent || isAutoTuning) Modifier.scale(pulseScale) else Modifier)
-                            .clip(CircleShape)
-                            .background(indicatorColor),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .clip(CircleShape)
-                                .background(if (isTonePresent || isAutoTuning) Color.White else Color(0xFF334155))
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(14.dp))
-
-                    Column {
-                        Text(
-                            text = when {
-                                isAutoTuning -> "ANALYZING SPECTRUM (FFT)..."
-                                isTonePresent -> "CARRIER LOCKED (CW)"
-                                isListening -> "DSP SEARCHING"
-                                else -> "RECEIVER IDLE"
-                            },
-                            style = MaterialTheme.typography.titleMedium.copy(letterSpacing = 0.5.sp),
-                            fontWeight = FontWeight.ExtraBold,
-                            color = if (isTonePresent) SdrPhosphorActive else if (isAutoTuning) SdrPhosphorCyan else MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Target Sidetone: ${targetFreqHz.toInt()} Hz" + if (isAutoLocked) " • Auto-Locked" else "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isAutoLocked) SdrPhosphorActive else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (isAutoLocked) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                }
-
-                // Quick Frequency Tuning Selector Chips with Auto-Detected frequency support
-                val baseFreqs = listOf(550.0, 600.0, 650.0, 700.0)
-                val displayFreqs = if (autoTunedFrequencyHz != null && autoTunedFrequencyHz !in baseFreqs) {
-                    baseFreqs + autoTunedFrequencyHz
-                } else {
-                    baseFreqs
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    displayFreqs.forEach { freq ->
-                        val isSelected = targetFreqHz == freq
-                        val isThisAuto = autoTunedFrequencyHz != null && freq == autoTunedFrequencyHz
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { onSetFrequency(freq) },
-                            label = {
-                                Text(
-                                    text = if (isThisAuto) "${freq.toInt()}Hz ★" else "${freq.toInt()}Hz",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = if (isThisAuto) SdrPhosphorActive.copy(alpha = 0.25f) else MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = if (isThisAuto) SdrPhosphorActive else MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Real-Time Signal Level Bar
-            val signalRatio = ((magnitude / max(0.001, threshold * 2.0)).toFloat()).coerceIn(0f, 1f)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "SIG",
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                LinearProgressIndicator(
-                    progress = { signalRatio },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)),
-                    color = if (isTonePresent) SdrPhosphorActive else MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // DSP Metrics Dashboard
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                MetricChip(label = "MAGNITUDE", value = String.format("%.3f", magnitude))
-                MetricChip(label = "PURITY", value = "${(spectralPurity * 100).toInt()}%")
-                MetricChip(label = "THRESH", value = String.format("%.3f", threshold))
-                MetricChip(label = "NOISE", value = String.format("%.3f", noiseFloor))
-            }
-        }
-    }
-}
-
-@Composable
-private fun MetricChip(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-    }
-}
-
-/**
- * SDR Waterfall / Oscilloscope Visualizer Card styled with deep dark CRT bezel and graticule lines.
- */
 @Composable
 private fun SdrOscilloscopeCard(
     amplitudePoints: List<AmplitudePoint>,
@@ -459,16 +158,16 @@ private fun SdrOscilloscopeCard(
     detectionThreshold: Double,
     noiseFloor: Double,
     isListening: Boolean,
-    targetFreqHz: Double
+    targetFreqHz: Double,
+    modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = SdrScreenBg),
         shape = RoundedCornerShape(18.dp),
         border = BorderStroke(1.5.dp, SdrGraticuleAccent)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            // Oscilloscope Top Header HUD
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -503,7 +202,6 @@ private fun SdrOscilloscopeCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Canvas Waveform with Dual-Pass Phosphor Trace and Graticule
             SdrCanvasWaveform(
                 amplitudePoints = amplitudePoints,
                 detectionThreshold = detectionThreshold,
@@ -514,7 +212,6 @@ private fun SdrOscilloscopeCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // HUD Footer
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -540,10 +237,6 @@ private fun SdrOscilloscopeCard(
     }
 }
 
-/**
- * Ultra-optimized Canvas drawing logic for SDR Oscilloscope & Waterfall visualizer.
- * Executes purely in Draw phase without heap allocations.
- */
 @Composable
 private fun SdrCanvasWaveform(
     amplitudePoints: List<AmplitudePoint>,
@@ -565,7 +258,6 @@ private fun SdrCanvasWaveform(
 
         if (width <= 0f || height <= 0f) return@Canvas
 
-        // 1. Draw Oscilloscope Graticule Grid Lines (8 vertical divisions, 4 horizontal divisions)
         val numVerticalGraticules = 8
         val stepGridX = width / numVerticalGraticules
         for (v in 1 until numVerticalGraticules) {
@@ -578,12 +270,10 @@ private fun SdrCanvasWaveform(
             )
         }
 
-        // Horizontal graticules (quarter lines)
         val quarterHeight = height / 4f
         drawLine(color = SdrGraticule, start = Offset(0f, quarterHeight), end = Offset(width, quarterHeight), strokeWidth = 1f)
         drawLine(color = SdrGraticule, start = Offset(0f, quarterHeight * 3f), end = Offset(width, quarterHeight * 3f), strokeWidth = 1f)
 
-        // Center Baseline (Prominent graticule)
         drawLine(
             color = SdrGraticuleAccent,
             start = Offset(0f, centerY),
@@ -591,7 +281,6 @@ private fun SdrCanvasWaveform(
             strokeWidth = 1.5f
         )
 
-        // Threshold boundary markers
         val thresholdYOffset = (detectionThreshold.toFloat() * centerY * 2.5f).coerceIn(0f, centerY - 6f)
         if (thresholdYOffset > 0f) {
             drawLine(
@@ -612,11 +301,9 @@ private fun SdrCanvasWaveform(
 
         if (count == 0) return@Canvas
 
-        // 2. Horizontally Scrolling Dual-Pass Phosphor Trace
         val stepX = width / count
         val maxHalfHeight = centerY - 6f
 
-        // Pass A: Outer Phosphor Ambient Glow (for active Morse tones)
         for (i in 0 until count) {
             val point = points[i]
             if (point.isTone) {
@@ -631,7 +318,6 @@ private fun SdrCanvasWaveform(
             }
         }
 
-        // Pass B: Inner Sharp Phosphor Trace
         for (i in 0 until count) {
             val point = points[i]
             val x = i * stepX
@@ -649,88 +335,17 @@ private fun SdrCanvasWaveform(
     }
 }
 
-/**
- * Dynamic User-Adjustable Squelch Threshold Control Panel.
- * Maps normalized UI slider (0.0 .. 1.0) to underlying Goertzel magnitude detection threshold.
- */
-@Composable
-private fun SdrSquelchControlCard(
-    squelchLevel: Float,
-    detectionThreshold: Double,
-    onSquelchChange: (Float) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
-        shape = RoundedCornerShape(18.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "SQUELCH THRESHOLD",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            letterSpacing = 1.sp,
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Text(
-                    text = String.format("%.3f mag (%.0f%%)", detectionThreshold, squelchLevel * 100f),
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    ),
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Slider(
-                value = squelchLevel,
-                onValueChange = onSquelchChange,
-                valueRange = 0f..1f,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Text(
-                text = "Adjust threshold above ambient noise floor line on oscilloscope.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-            )
-        }
-    }
-}
-
-/**
- * Live Decoded CW Teletype Card with monospace typography and in-progress element indicators.
- */
 @Composable
 private fun DecodedTeletypeCard(
     decodedText: String,
     currentMorseSymbol: String,
     estimatedWpm: Int,
     isListening: Boolean,
-    onClearText: () -> Unit
+    onClearText: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         ),
@@ -738,7 +353,7 @@ private fun DecodedTeletypeCard(
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .padding(18.dp)
         ) {
             Row(
@@ -788,18 +403,23 @@ private fun DecodedTeletypeCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Teletype Terminal Window
+            val scrollState = rememberScrollState()
+            LaunchedEffect(decodedText) {
+                scrollState.animateScrollTo(scrollState.maxValue)
+            }
+
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(110.dp)
+                    .weight(1f)
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .verticalScroll(scrollState)
                         .padding(14.dp),
                     contentAlignment = Alignment.TopStart
                 ) {
@@ -826,7 +446,6 @@ private fun DecodedTeletypeCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Current In-Progress Morse Pulse Symbol
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -854,29 +473,25 @@ private fun DecodedTeletypeCard(
     }
 }
 
-/**
- * Calibration Controls Toolbar for auto-detecting CW pitch and calibrating noise floor.
- */
 @Composable
-private fun DecodeCalibrationControls(
+private fun DecodeControlsToolbar(
     isListening: Boolean,
-    isCalibrating: Boolean,
     isAutoTuning: Boolean,
-    onCalibrate: () -> Unit,
+    onToggleListening: () -> Unit,
     onAutoDetectPitch: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        // Auto-Detect Pitch Button
         Button(
             onClick = onAutoDetectPitch,
-            enabled = !isAutoTuning && !isCalibrating,
+            enabled = !isAutoTuning,
             modifier = Modifier
-                .weight(1.1f)
-                .height(50.dp),
-            shape = RoundedCornerShape(14.dp),
+                .weight(1f)
+                .height(54.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer
@@ -884,93 +499,46 @@ private fun DecodeCalibrationControls(
         ) {
             if (isAutoTuning) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Detecting...",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
                 )
             } else {
                 Icon(
                     imageVector = Icons.Default.AutoFixHigh,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Auto-Detect Pitch",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
+                    contentDescription = "Auto-Detect Tone",
+                    modifier = Modifier.size(20.dp)
                 )
             }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Auto Tune",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
         }
 
-        // Calibrate Noise Floor Button
-        OutlinedButton(
-            onClick = onCalibrate,
-            enabled = isListening && !isCalibrating && !isAutoTuning,
+        Button(
+            onClick = onToggleListening,
             modifier = Modifier
-                .weight(0.9f)
-                .height(50.dp),
-            shape = RoundedCornerShape(14.dp)
+                .weight(1f)
+                .height(54.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isListening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+            )
         ) {
-            if (isCalibrating) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    strokeWidth = 2.dp
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Calibrating...", style = MaterialTheme.typography.labelSmall)
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Calibrate",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
+            Icon(
+                imageVector = if (isListening) Icons.Default.MicOff else Icons.Default.Mic,
+                contentDescription = null
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (isListening) "Stop Rx" else "Start Rx",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
         }
-    }
-}
-
-/**
- * Receiver Controls Toolbar for starting/stopping stream.
- */
-@Composable
-private fun DecodeControlsToolbar(
-    isListening: Boolean,
-    onToggleListening: () -> Unit
-) {
-    // Primary Action: Start / Stop Receiver
-    Button(
-        onClick = onToggleListening,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(54.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (isListening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-        )
-    ) {
-        Icon(
-            imageVector = if (isListening) Icons.Default.MicOff else Icons.Default.Mic,
-            contentDescription = null
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = if (isListening) "Stop Receiver" else "Start Receiver",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
     }
 }
 
