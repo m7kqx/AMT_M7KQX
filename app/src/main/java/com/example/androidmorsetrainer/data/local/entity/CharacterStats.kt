@@ -44,7 +44,10 @@ data class CharacterStats(
     val priorityWeight: Float = 1.0f,
 
     @ColumnInfo(name = "successful_challenges", defaultValue = "0")
-    val successfulChallenges: Int = correctCount
+    val successfulChallenges: Int = correctCount,
+
+    @ColumnInfo(name = "is_prosign", defaultValue = "0")
+    val isProsign: Boolean = false
 ) {
     val totalAttempts: Int
         get() = correctCount + incorrectCount

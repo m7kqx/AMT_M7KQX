@@ -19,6 +19,9 @@ data class UserProfile(
     @ColumnInfo(name = "current_koch_level")
     val currentKochLevel: Int = 1,
 
+    @ColumnInfo(name = "current_prosign_level")
+    val currentProsignLevel: Int = 1,
+
     @ColumnInfo(name = "created_at")
     val createdAt: Long = System.currentTimeMillis()
 )

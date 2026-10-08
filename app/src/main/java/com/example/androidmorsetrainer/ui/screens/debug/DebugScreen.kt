@@ -95,7 +95,7 @@ fun DebugScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 var expanded by remember { mutableStateOf(false) }
-                val kochLevels = remember { (1..41).toList() }
+                val kochLevels = remember { (1..39).toList() }
                 val currentLevel = activeProfile?.currentKochLevel ?: 1
 
                 ExposedDropdownMenuBox(
@@ -136,6 +136,89 @@ fun DebugScreen(
                                         onKochLevelChange(level)
                                     } else if (activeProfile != null) {
                                         viewModel.updateProfileKochLevel(activeProfile.id, level)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Prosigns Progression Override Card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Prosigns Progression Override",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                if (activeProfile != null) {
+                    Text(
+                        text = "Current Prosigns Level: ${activeProfile.currentProsignLevel}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                var expandedProsigns by remember { mutableStateOf(false) }
+                val prosignLevels = remember { (1..12).toList() }
+                val currentProsignLevel = activeProfile?.currentProsignLevel ?: 1
+
+                ExposedDropdownMenuBox(
+                    expanded = expandedProsigns,
+                    onExpandedChange = { if (activeProfile != null) expandedProsigns = !expandedProsigns },
+                    modifier = Modifier.fillMaxWidth(0.9f)
+                ) {
+                    OutlinedTextField(
+                        value = "Prosigns Level $currentProsignLevel",
+                        onValueChange = {},
+                        readOnly = true,
+                        enabled = activeProfile != null,
+                        label = { Text("Prosigns Progression Level") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedProsigns) },
+                        modifier = Modifier
+                            .menuAnchor()
+                            .fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                        singleLine = true
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedProsigns,
+                        onDismissRequest = { expandedProsigns = false }
+                    ) {
+                        prosignLevels.forEach { level ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = "Level $level",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (level == currentProsignLevel) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (level == currentProsignLevel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                onClick = {
+                                    expandedProsigns = false
+                                    if (activeProfile != null) {
+                                        viewModel.updateProfileProsignLevel(activeProfile.id, level)
                                     }
                                 }
                             )

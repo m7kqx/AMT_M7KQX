@@ -10,6 +10,11 @@ enum class DrillState {
     Finished
 }
 
+enum class TrainingMode {
+    Koch,
+    Prosigns
+}
+
 /**
  * UI State representing the interactive Koch Train Screen.
  * Immutability annotation helps Jetpack Compose optimize recomposition passes on high-refresh screens.
@@ -18,6 +23,8 @@ enum class DrillState {
 data class TrainUiState(
     val activeProfile: UserProfile? = null,
     val activeKochLevel: Int = 1,
+    val activeProsignLevel: Int = 1,
+    val trainingMode: TrainingMode = TrainingMode.Koch,
     val currentWpm: Int = 20,
     val availableCharacters: List<String> = emptyList(),
     val targetCharacter: String = "",
@@ -54,8 +61,12 @@ data class TrainUiState(
     val activeNewCharacterSuccessCount: Int = 0,
     val newCharacterSuccessCount: Int = activeNewCharacterSuccessCount,
     val characterSuccessCounts: Map<String, Int> = emptyMap(),
-    val characterAccuracies: Map<String, Float> = emptyMap()
+    val characterAccuracies: Map<String, Float> = emptyMap(),
+    val prosignTextInput: String = ""
 ) {
+    val currentLevel: Int
+        get() = if (trainingMode == TrainingMode.Prosigns) activeProsignLevel else activeKochLevel
+
     val activeNewCharacter: String?
         get() = newlyIntroducedCharacter ?: activeHintCharacter
 

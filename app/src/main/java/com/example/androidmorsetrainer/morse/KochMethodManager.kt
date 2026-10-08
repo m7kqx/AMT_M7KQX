@@ -44,7 +44,7 @@ class KochMethodManager(
     /**
      * Koch method starts at Level 1 with 2 characters ("K", "M").
      * Each subsequent level introduces 1 new character.
-     * Maximum level is sequence.size - 1 (Level 42, having all 43 characters).
+     * Maximum level is sequence.size - 1 (Level 40, having all 41 characters).
      */
     val minLevel: Int = 1
     val maxLevel: Int = sequence.size - 1
@@ -75,7 +75,16 @@ class KochMethodManager(
      * Converts a single character or prosign string into its Morse representation (dots and dashes).
      */
     fun getMorseCode(character: String): String? {
-        return MorseConstants.MORSE_MAP[character.uppercase()]
+        val upper = character.uppercase()
+        if (MorseConstants.MORSE_MAP.containsKey(upper)) {
+            return MorseConstants.MORSE_MAP[upper]
+        }
+        // Check for multi-character sequences (e.g. CQ)
+        val parts = upper.mapNotNull { MorseConstants.MORSE_MAP[it.toString()] }
+        if (parts.size == upper.length) {
+            return parts.joinToString(" ")
+        }
+        return null
     }
 
     /**

@@ -35,15 +35,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Extended Koch sequence of 41 characters:
- * 40 standard LCWO characters plus the '=' (<BT>) prosign symbol appended.
+ * Standard Koch sequence of 40 characters.
  */
 val EXTENDED_KOCH_SEQUENCE: List<String> = listOf(
     "K", "M", "R", "S", "U", "A", "P", "T", "L", "O",
     "W", "I", ".", "N", "J", "E", "F", "0", "Y", ",",
     "V", "G", "5", "/", "Q", "9", "Z", "H", "3", "8",
-    "B", "?", "4", "2", "7", "C", "1", "D", "6", "X",
-    "="
+    "B", "?", "4", "2", "7", "C", "1", "D", "6", "X"
 )
 
 /**
@@ -78,7 +76,7 @@ private val KEYBOARD_ROW_4 = listOf("Z", "X", "C", "V", "B", "N", "M")
  * - Row 2: 'Q' through 'P' (10 keys)
  * - Row 3: 'A' through 'L' (9 keys with 0.5x horizontal padding on left & right)
  * - Row 4: 'Z' through 'M' (7 keys with 1.5x horizontal padding on left & right)
- * - Row 5: Action row: '?', ',', REPEAT (2.5x width), '.', '/', '=' (labeled "BT")
+ * - Row 5: Action row: '?', ',', REPEAT (2.8x width), '.', '/' (1.8x width)
  */
 @Composable
 fun KochKeyboard(
@@ -177,10 +175,15 @@ fun KochKeyboard(
                         height = keyHeight
                     )
                 }
-                Spacer(modifier = Modifier.weight(1.5f))
+                KeyboardBackspaceKey(
+                    onBackspaceClick = onBackspaceClick,
+                    enabled = enabled,
+                    weight = 1.5f,
+                    height = keyHeight
+                )
             }
 
-            // Row 5: Action row left-to-right: '?', ',', REPEAT, '.', '/', '=' (labeled "BT")
+            // Row 5: Action row left-to-right: '?', ',', REPEAT, '.', '/'
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -193,7 +196,7 @@ fun KochKeyboard(
                     enabled = enabled,
                     lastGuessedCharacter = lastGuessedCharacter,
                     lastGuessWasCorrect = lastGuessWasCorrect,
-                    weight = 1.5f,
+                    weight = 1.8f,
                     height = keyHeight
                 )
 
@@ -205,15 +208,15 @@ fun KochKeyboard(
                     enabled = enabled,
                     lastGuessedCharacter = lastGuessedCharacter,
                     lastGuessWasCorrect = lastGuessWasCorrect,
-                    weight = 1.5f,
+                    weight = 1.8f,
                     height = keyHeight
                 )
 
-                // 3. REPEAT Button (2.5x standard width, distinct primary container color, replay icon)
+                // 3. REPEAT Button (2.8x standard width, distinct primary container color, replay icon)
                 KeyboardRepeatKey(
                     onRepeatClick = onRepeatClick,
                     enabled = enabled,
-                    weight = 2.5f,
+                    weight = 2.8f,
                     height = keyHeight
                 )
 
@@ -225,7 +228,7 @@ fun KochKeyboard(
                     enabled = enabled,
                     lastGuessedCharacter = lastGuessedCharacter,
                     lastGuessWasCorrect = lastGuessWasCorrect,
-                    weight = 1.5f,
+                    weight = 1.8f,
                     height = keyHeight
                 )
 
@@ -237,20 +240,7 @@ fun KochKeyboard(
                     enabled = enabled,
                     lastGuessedCharacter = lastGuessedCharacter,
                     lastGuessWasCorrect = lastGuessWasCorrect,
-                    weight = 1.5f,
-                    height = keyHeight
-                )
-
-                // 6. '=' Key (Labeled "BT", emits '=')
-                KeyboardCharKey(
-                    character = "=",
-                    label = "BT",
-                    currentKochLevel = currentKochLevel,
-                    onCharacterClick = onCharacterClick,
-                    enabled = enabled,
-                    lastGuessedCharacter = lastGuessedCharacter,
-                    lastGuessWasCorrect = lastGuessWasCorrect,
-                    weight = 1.5f,
+                    weight = 1.8f,
                     height = keyHeight
                 )
             }
@@ -330,7 +320,7 @@ private fun RowScope.KeyboardCharKey(
 }
 
 /**
- * Dedicated REPEAT button on Row 5 (2.5x standard width, distinct primary container color, replay icon).
+ * Dedicated REPEAT button on Row 5 (2.8x standard width, distinct primary container color, replay icon).
  */
 @Composable
 private fun RowScope.KeyboardRepeatKey(
@@ -379,7 +369,7 @@ private fun RowScope.KeyboardRepeatKey(
 }
 
 /**
- * Dedicated Backspace button on Row 5. Always fully opaque and clickable regardless of Koch level.
+ * Dedicated Backspace button on Row 4. Always fully opaque and clickable regardless of Koch level.
  */
 @Composable
 private fun RowScope.KeyboardBackspaceKey(

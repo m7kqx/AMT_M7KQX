@@ -59,7 +59,9 @@ object MorseConstants {
         // Prosigns (procedural signals)
         "<BT>" to "-...-",   // Break / pause between sections
         "<SK>" to "...-.-",  // Silent Key / End of transmission
-        "<AR>" to ".-.-."    // End of message
+        "<AR>" to ".-.-.",   // End of message
+        "<KN>" to "-.--.",   // Over, only to the station called
+        "<AS>" to ".-..."    // Wait
     )
 
     val REVERSE_MORSE_MAP: Map<String, String> = MORSE_MAP.entries.associate { (k, v) -> v to k }
@@ -72,7 +74,14 @@ object MorseConstants {
         "W", "I", ".", "N", "J", "E", "F", "0", "Y", ",",
         "V", "G", "5", "/", "Q", "9", "Z", "H", "3", "8",
         "B", "?", "4", "2", "7", "C", "1", "D", "6", "X",
-        "<BT>", "<SK>", "<AR>"
+        "<AR>"
+    )
+
+    /**
+     * Standard UK/IARU Region 1 Prosigns and common abbreviations sequence.
+     */
+    val PROSIGNS_SEQUENCE: List<String> = listOf(
+        "<AR>", "<BT>", "<SK>", "<KN>", "<AS>", "CQ", "DE", "K", "R", "PSE", "UR", "RST"
     )
 
     /**

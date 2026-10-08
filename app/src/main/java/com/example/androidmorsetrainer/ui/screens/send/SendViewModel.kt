@@ -319,8 +319,30 @@ class SendViewModel(
         val target = currentState.targetCharacter
         if (target.isEmpty() || !currentState.isSessionActive || currentState.isSessionFinished || isEvaluating) return
 
-        val isCorrect = keyedChar.equals(target, ignoreCase = true)
-        Log.d(TAG, "Keyed: '$keyedChar', Target: '$target', isCorrect=$isCorrect, index=${currentState.currentChallengeIndex}/${currentState.sessionBatchSize}")
+        val accumulatedWord = activeDecoder.currentWord.value
+        val isTargetMultiChar = target.length > 1 && !target.startsWith("<")
+
+        val isCorrect: Boolean
+        val evaluatedString: String
+
+        if (isTargetMultiChar) {
+            if (accumulatedWord.equals(target, ignoreCase = true)) {
+                isCorrect = true
+                evaluatedString = accumulatedWord
+            } else if (target.startsWith(accumulatedWord, ignoreCase = true)) {
+                // Valid prefix, wait for more characters to complete the word
+                return
+            } else {
+                // Invalid prefix
+                isCorrect = false
+                evaluatedString = accumulatedWord
+            }
+        } else {
+            isCorrect = keyedChar.equals(target, ignoreCase = true)
+            evaluatedString = keyedChar
+        }
+
+        Log.d(TAG, "Keyed: '$evaluatedString', Target: '$target', isCorrect=$isCorrect, index=${currentState.currentChallengeIndex}/${currentState.sessionBatchSize}")
 
         isEvaluating = true
         activeDecoder.clear()
@@ -380,15 +402,15 @@ class SendViewModel(
             _uiState.update {
                 it.copy(
                     verificationStatus = if (isCorrect) VerificationStatus.CORRECT else VerificationStatus.INCORRECT,
-                    lastEvaluatedChar = keyedChar,
-                    lastKeyedCharacter = keyedChar,
+                    lastEvaluatedChar = evaluatedString,
+                    lastKeyedCharacter = evaluatedString,
                     lastKeyWasCorrect = isCorrect,
                     sessionTotalAttempts = newTotalAttempts,
                     sessionCorrectAttempts = newCorrectAttempts,
                     sessionAccuracy = newAccuracy,
                     masteredCharacters = updatedMastered,
                     sessionCharacterAttempts = sessionCharacterAttempts.toMap(),
-                    feedbackMessage = if (isCorrect) "Correct! Target '$target' sent cleanly." else "Decoded '$keyedChar', expected '$target'."
+                    feedbackMessage = if (isCorrect) "Correct! Target '$target' sent cleanly." else "Decoded '$evaluatedString', expected '$target'."
                 )
             }
 

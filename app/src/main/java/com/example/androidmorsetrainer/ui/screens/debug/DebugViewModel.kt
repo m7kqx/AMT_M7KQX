@@ -49,6 +49,15 @@ class DebugViewModel(
         }
     }
 
+    fun updateProfileProsignLevel(profileId: Long, level: Int) {
+        viewModelScope.launch {
+            val profile = profileRepository?.getProfileById(profileId)
+            if (profile != null) {
+                profileRepository?.updateProfile(profile.copy(currentProsignLevel = level))
+            }
+        }
+    }
+
     fun updateActiveProfileKochLevel(profile: UserProfile?, level: Int) {
         if (profile == null) return
         updateProfileKochLevel(profile.id, level)

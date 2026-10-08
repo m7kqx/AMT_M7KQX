@@ -78,6 +78,14 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
 import com.example.androidmorsetrainer.morse.MorseConstants
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.input.ImeAction
 
 @Composable
 fun TrainScreen(
@@ -112,6 +120,7 @@ fun TrainScreen(
                 TrainPreDrillSetupContent(
                     uiState = uiState,
                     profileName = activeProfile.name,
+                    onSelectTrainingMode = viewModel::setTrainingMode,
                     onSelectDrillLength = viewModel::setDrillLength,
                     onSelectWpm = viewModel::setWpm,
                     onStartDrill = { viewModel.startLesson(uiState.selectedDrillLength) },
@@ -132,6 +141,8 @@ fun TrainScreen(
                     uiState = uiState,
                     onPlayTone = viewModel::playTone,
                     onGuess = viewModel::submitGuess,
+                    onUpdateProsignTextInput = viewModel::updateProsignTextInput,
+                    onSubmitProsignTextInput = viewModel::submitProsignTextInput,
                     onQuitDrill = viewModel::quitDrill,
                     onDismissLevelUpMessage = viewModel::dismissLevelUpMessage,
                     onStartLesson = viewModel::startLesson,
@@ -152,6 +163,7 @@ fun TrainScreen(
 private fun TrainPreDrillSetupContent(
     uiState: TrainUiState,
     profileName: String,
+    onSelectTrainingMode: (TrainingMode) -> Unit,
     onSelectDrillLength: (Int) -> Unit,
     onSelectWpm: (Int) -> Unit,
     onStartDrill: () -> Unit,
@@ -190,7 +202,11 @@ private fun TrainPreDrillSetupContent(
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                         Text(
-                            text = "Koch Level ${uiState.activeKochLevel} of 42",
+                            text = if (uiState.trainingMode == TrainingMode.Prosigns) {
+                                "Prosigns Level ${uiState.activeProsignLevel} of 12"
+                            } else {
+                                "Koch Level ${uiState.activeKochLevel} of 40"
+                            },
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -216,6 +232,25 @@ private fun TrainPreDrillSetupContent(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                         )
                     }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = uiState.trainingMode == TrainingMode.Koch,
+                        onClick = { onSelectTrainingMode(TrainingMode.Koch) },
+                        label = { Text("Koch Method") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = uiState.trainingMode == TrainingMode.Prosigns,
+                        onClick = { onSelectTrainingMode(TrainingMode.Prosigns) },
+                        label = { Text("Prosigns & Abbreviations") },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -663,6 +698,8 @@ fun TrainScreenContent(
     uiState: TrainUiState,
     onPlayTone: () -> Unit,
     onGuess: (String) -> Unit,
+    onUpdateProsignTextInput: (String) -> Unit,
+    onSubmitProsignTextInput: () -> Unit,
     onQuitDrill: () -> Unit,
     onDismissLevelUpMessage: () -> Unit,
     onStartLesson: () -> Unit,
@@ -674,17 +711,15 @@ fun TrainScreenContent(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.SpaceBetween
+            .imePadding()
+            .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
         // Upper Information Section (compact, scrollable if height is constrained)
-        val scrollState = rememberScrollState()
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f, fill = false)
-                .verticalScroll(scrollState),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .weight(0.6f),
+            verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Bottom)
         ) {
             // 1. Celebratory Level-Up Banner (if triggered)
             if (uiState.levelUpMessage != null) {
@@ -768,10 +803,20 @@ fun TrainScreenContent(
             ) {
                 Text(
                     text = visualAidText ?: "",
-                    style = MaterialTheme.typography.displayMedium.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    ),
+                    style = when {
+                        (visualAidText?.length ?: 0) > 12 -> MaterialTheme.typography.titleLarge.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                        (visualAidText?.length ?: 0) > 6 -> MaterialTheme.typography.headlineMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                        else -> MaterialTheme.typography.displayMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
                     color = MaterialTheme.colorScheme.primary,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
@@ -781,24 +826,71 @@ fun TrainScreenContent(
                         .padding(vertical = 4.dp)
                 )
             }
-        }
 
-        // 5. Custom In-App Koch Keyboard anchored to bottom of viewable area
+                if (uiState.trainingMode == TrainingMode.Prosigns) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp, top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = uiState.prosignTextInput,
+                    onValueChange = { }, // Handled by KochKeyboard
+                    label = { Text("Enter Sequence") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    enabled = uiState.hasTarget && (uiState.drillState == DrillState.DrillActive || uiState.drillState == DrillState.ShowingResult),
+                    readOnly = true // Prevents system keyboard from appearing
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onSubmitProsignTextInput,
+                        enabled = uiState.hasTarget && uiState.drillState == DrillState.DrillActive && uiState.prosignTextInput.isNotBlank(),
+                        
+                    ) {
+                        Text("Submit")
+                    }
+                }
+            }
+        }
+        } // End of 60% container
+
+        // Custom In-App Koch Keyboard anchored to bottom of viewable area
         Crossfade(
             targetState = uiState.targetCharacter,
             animationSpec = tween(durationMillis = 250),
             label = "challengeTransition",
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(0.4f)
                 .padding(bottom = 2.dp)
         ) { _ ->
             KochKeyboard(
-                currentKochLevel = uiState.activeKochLevel,
-                onCharacterClick = onGuess,
+                currentKochLevel = if (uiState.trainingMode == TrainingMode.Prosigns) 40 else uiState.activeKochLevel,
+                onCharacterClick = { char -> 
+                    if (uiState.trainingMode == TrainingMode.Prosigns) {
+                        if (uiState.drillState == DrillState.DrillActive) {
+                            onUpdateProsignTextInput(uiState.prosignTextInput + char)
+                        }
+                    } else {
+                        onGuess(char)
+                    }
+                },
+                onBackspaceClick = {
+                    if (uiState.trainingMode == TrainingMode.Prosigns) {
+                        if (uiState.drillState == DrillState.DrillActive && uiState.prosignTextInput.isNotEmpty()) {
+                            onUpdateProsignTextInput(uiState.prosignTextInput.dropLast(1))
+                        }
+                    } else {
+                        onBackspace()
+                    }
+                },
                 onRepeatClick = onPlayTone,
                 enabled = uiState.hasTarget && uiState.drillState == DrillState.DrillActive,
-                lastGuessedCharacter = uiState.lastGuessedCharacter,
-                lastGuessWasCorrect = uiState.lastGuessWasCorrect,
+                lastGuessedCharacter = if (uiState.trainingMode == TrainingMode.Prosigns) null else uiState.lastGuessedCharacter,
+                lastGuessWasCorrect = if (uiState.trainingMode == TrainingMode.Prosigns) null else uiState.lastGuessWasCorrect,
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -853,8 +945,7 @@ private fun AnswerGrid(
                 }
                 if (rowItems.size < columnsCount) {
                     repeat(columnsCount - rowItems.size) {
-                        Spacer(modifier = Modifier.weight(1f))
-                    }
+                                            }
                 }
             }
         }
@@ -887,7 +978,7 @@ private fun KochLevelHeader(
             ) {
                 Column {
                     Text(
-                        text = "Koch Level $activeLevel of 42",
+                        text = "Koch Level $activeLevel of 40",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -917,9 +1008,9 @@ private fun KochLevelHeader(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Level progression bar (Level 1..42)
+            // Level progression bar (Level 1..40)
             LinearProgressIndicator(
-                progress = { activeLevel / 42f },
+                progress = { activeLevel / 40f },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp),
@@ -1174,6 +1265,7 @@ private fun ScoreMetricTile(
     valueColor: Color,
     modifier: Modifier = Modifier
 ) {
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier

@@ -40,6 +40,12 @@ class CwDecoder(
     private val _characterEvents = MutableSharedFlow<String>(extraBufferCapacity = 64)
     val characterEvents: SharedFlow<String> = _characterEvents.asSharedFlow()
 
+    private val _wordEvents = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    val wordEvents: SharedFlow<String> = _wordEvents.asSharedFlow()
+
+    private val _currentWord = MutableStateFlow("")
+    val currentWord: StateFlow<String> = _currentWord.asStateFlow()
+
     private val _currentSymbol = MutableStateFlow("")
     val currentSymbol: StateFlow<String> = _currentSymbol.asStateFlow()
 
@@ -114,10 +120,17 @@ class CwDecoder(
 
         _decodedText.update { it + char }
         _characterEvents.tryEmit(char)
+        _currentWord.update { it + char }
         _currentSymbol.value = ""
     }
 
     private fun commitWordSpace() {
+        val word = _currentWord.value
+        if (word.isNotEmpty()) {
+            _wordEvents.tryEmit(word)
+            _currentWord.value = ""
+        }
+
         _decodedText.update { current ->
             if (current.isNotEmpty() && !current.endsWith(" ")) {
                 Log.d(TAG, "Decoded Word Space")
@@ -134,6 +147,7 @@ class CwDecoder(
     fun clear() {
         silenceJob?.cancel()
         _currentSymbol.value = ""
+        _currentWord.value = ""
         _decodedText.value = ""
     }
 }
