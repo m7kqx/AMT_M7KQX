@@ -62,7 +62,8 @@ data class TrainUiState(
     val newCharacterSuccessCount: Int = activeNewCharacterSuccessCount,
     val characterSuccessCounts: Map<String, Int> = emptyMap(),
     val characterAccuracies: Map<String, Float> = emptyMap(),
-    val prosignTextInput: String = ""
+    val prosignTextInput: String = "",
+    val hideBottomBarPreference: Boolean = false
 ) {
     val currentLevel: Int
         get() = if (trainingMode == TrainingMode.Prosigns) activeProsignLevel else activeKochLevel

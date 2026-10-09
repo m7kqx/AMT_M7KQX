@@ -256,11 +256,14 @@ class TrainViewModel(
             val isVisualAidActive = newChar != null && !isThresholdReached
             val visualAid = if (isVisualAidActive && dotRep != null) "$newChar $dotRep" else null
 
+            audioGenerator.setWpm(profile.preferredWpm)
+
             _uiState.update {
                 it.copy(
                     activeProfile = profile,
                     activeKochLevel = profile.currentKochLevel,
                     activeProsignLevel = profile.currentProsignLevel,
+                    currentWpm = profile.preferredWpm,
                     availableCharacters = pool,
                     targetCharacter = "",
                     isPlayingAudio = false,
@@ -318,6 +321,13 @@ class TrainViewModel(
         if (profile != null) {
             setActiveProfile(profile)
         }
+    }
+
+    /**
+     * Updates the "Hide Bottom Bar" preference.
+     */
+    fun setHideBottomBarPreference(hide: Boolean) {
+        _uiState.update { it.copy(hideBottomBarPreference = hide) }
     }
 
     /**
@@ -464,6 +474,12 @@ class TrainViewModel(
         audioGenerator.setWpm(clampedWpm)
         _uiState.update { it.copy(currentWpm = clampedWpm) }
         Log.d(TAG, "Active WPM updated to $clampedWpm")
+        val profile = _uiState.value.activeProfile
+        if (profile != null) {
+            viewModelScope.launch(ioDispatcher) {
+                profileRepository.updatePreferredWpm(profile.id, clampedWpm)
+            }
+        }
     }
 
     /**

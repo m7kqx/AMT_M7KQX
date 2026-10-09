@@ -70,6 +70,7 @@ fun MorseTrainerApp(
     debugViewModel: com.example.androidmorsetrainer.ui.screens.debug.DebugViewModel = viewModel(factory = com.example.androidmorsetrainer.ui.screens.debug.DebugViewModel.Factory),
 ) {
     val profilesUiState by profilesViewModel.uiState.collectAsStateWithLifecycle()
+    val trainUiState by trainViewModel.uiState.collectAsStateWithLifecycle()
     var currentTab by rememberSaveable { mutableStateOf(NavigationTab.PROFILES) }
 
     Scaffold(
@@ -109,20 +110,23 @@ fun MorseTrainerApp(
             )
         },
         bottomBar = {
-            NavigationBar {
-                NavigationTab.entries.forEach { tab ->
-                    val isSelected = currentTab == tab
-                    NavigationBarItem(
-                        selected = isSelected,
-                        onClick = { currentTab = tab },
-                        icon = {
-                            Icon(
-                                imageVector = tab.icon,
-                                contentDescription = tab.contentDescription,
-                            )
-                        },
-                        label = { Text(tab.title) },
-                    )
+            val shouldHideBottomBar = currentTab == NavigationTab.TRAIN && trainUiState.isSessionActive && trainUiState.hideBottomBarPreference
+            if (!shouldHideBottomBar) {
+                NavigationBar {
+                    NavigationTab.entries.forEach { tab ->
+                        val isSelected = currentTab == tab
+                        NavigationBarItem(
+                            selected = isSelected,
+                            onClick = { currentTab = tab },
+                            icon = {
+                                Icon(
+                                    imageVector = tab.icon,
+                                    contentDescription = tab.contentDescription,
+                                )
+                            },
+                            label = { Text(tab.title) },
+                        )
+                    }
                 }
             }
         },

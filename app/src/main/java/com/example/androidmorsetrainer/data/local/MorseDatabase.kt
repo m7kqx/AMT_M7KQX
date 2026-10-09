@@ -14,7 +14,7 @@ import com.example.androidmorsetrainer.data.local.entity.UserProfile
         UserProfile::class,
         CharacterStats::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class MorseDatabase : RoomDatabase() {

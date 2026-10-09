@@ -27,6 +27,9 @@ interface UserProfileDao {
     @Update
     suspend fun updateProfile(profile: UserProfile)
 
+    @Query("UPDATE user_profiles SET preferred_wpm = :wpm WHERE id = :id")
+    suspend fun updatePreferredWpm(id: Long, wpm: Int)
+
     @Delete
     suspend fun deleteProfile(profile: UserProfile)
 

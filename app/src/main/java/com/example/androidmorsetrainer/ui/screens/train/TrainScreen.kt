@@ -123,6 +123,7 @@ fun TrainScreen(
                     onSelectTrainingMode = viewModel::setTrainingMode,
                     onSelectDrillLength = viewModel::setDrillLength,
                     onSelectWpm = viewModel::setWpm,
+                    onToggleHideBottomBar = viewModel::setHideBottomBarPreference,
                     onStartDrill = { viewModel.startLesson(uiState.selectedDrillLength) },
                     modifier = modifier
                 )
@@ -166,6 +167,7 @@ private fun TrainPreDrillSetupContent(
     onSelectTrainingMode: (TrainingMode) -> Unit,
     onSelectDrillLength: (Int) -> Unit,
     onSelectWpm: (Int) -> Unit,
+    onToggleHideBottomBar: (Boolean) -> Unit,
     onStartDrill: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -423,9 +425,33 @@ private fun TrainPreDrillSetupContent(
             }
         }
 
+        // 5. Hide Bottom Bar Setting
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Hide Bottom Navigation Bar",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Hides the bar during active drills to maximize keyboard space.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            androidx.compose.material3.Switch(
+                checked = uiState.hideBottomBarPreference,
+                onCheckedChange = onToggleHideBottomBar
+            )
+        }
+
         Spacer(modifier = Modifier.weight(1f, fill = false))
 
-        // 4. Prominent "Start Drill" Action Button
+        // 6. Prominent "Start Drill" Action Button
         Button(
             onClick = onStartDrill,
             modifier = Modifier
