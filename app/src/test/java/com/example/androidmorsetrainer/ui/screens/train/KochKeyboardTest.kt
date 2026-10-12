@@ -8,12 +8,12 @@ import org.junit.Test
 class KochKeyboardTest {
 
     @Test
-    fun extendedKochSequence_containsExact41Characters() {
-        assertEquals(41, EXTENDED_KOCH_SEQUENCE.size)
+    fun extendedKochSequence_containsExact40Characters() {
+        assertEquals(40, EXTENDED_KOCH_SEQUENCE.size)
     }
 
     @Test
-    fun extendedKochSequence_orderMatchesStandardLcwoPlusEqualSign() {
+    fun extendedKochSequence_orderMatchesStandardKochProgression() {
         val expectedFirstTen = listOf("K", "M", "R", "S", "U", "A", "P", "T", "L", "O")
         assertEquals(expectedFirstTen, EXTENDED_KOCH_SEQUENCE.take(10))
 
@@ -21,14 +21,13 @@ class KochKeyboardTest {
         assertEquals("M", EXTENDED_KOCH_SEQUENCE[1])
         assertEquals("R", EXTENDED_KOCH_SEQUENCE[2])
         assertEquals("X", EXTENDED_KOCH_SEQUENCE[39])
-        assertEquals("=", EXTENDED_KOCH_SEQUENCE[40])
     }
 
     @Test
     fun extendedKochSequence_containsAllRequiredCharacterTypes() {
         val alphabet = ('A'..'Z').map { it.toString() }
         val digits = ('0'..'9').map { it.toString() }
-        val punctuationAndProsigns = listOf(".", ",", "/", "?", "=")
+        val punctuation = listOf(".", ",", "/", "?")
 
         alphabet.forEach { letter ->
             assertTrue("Sequence must contain letter $letter", EXTENDED_KOCH_SEQUENCE.contains(letter))
@@ -38,8 +37,13 @@ class KochKeyboardTest {
             assertTrue("Sequence must contain digit $digit", EXTENDED_KOCH_SEQUENCE.contains(digit))
         }
 
-        punctuationAndProsigns.forEach { symbol ->
+        punctuation.forEach { symbol ->
             assertTrue("Sequence must contain symbol $symbol", EXTENDED_KOCH_SEQUENCE.contains(symbol))
+        }
+
+        val prosigns = listOf("<BT>", "<SK>", "<AR>")
+        prosigns.forEach { prosign ->
+            assertFalse("Sequence must not contain prosign $prosign", EXTENDED_KOCH_SEQUENCE.contains(prosign))
         }
     }
 
@@ -54,6 +58,7 @@ class KochKeyboardTest {
         assertFalse(isKochCharacterUnlocked("A", 1))
         assertFalse(isKochCharacterUnlocked("1", 1))
         assertFalse(isKochCharacterUnlocked("?", 1))
+        assertFalse(isKochCharacterUnlocked("<BT>", 1))
         assertFalse(isKochCharacterUnlocked("=", 1))
     }
 
@@ -89,16 +94,30 @@ class KochKeyboardTest {
         assertFalse(isKochCharacterUnlocked("/", 22))
         assertTrue(isKochCharacterUnlocked("/", 23))
 
-        // '=' is at index 40
-        assertEquals(40, EXTENDED_KOCH_INDEX_MAP["="])
+        // Prosigns must never be unlocked in Koch mode
+        assertFalse(isKochCharacterUnlocked("<BT>", 39))
         assertFalse(isKochCharacterUnlocked("=", 39))
-        assertTrue(isKochCharacterUnlocked("=", 40))
-        assertTrue(isKochCharacterUnlocked("=", 42))
+        assertFalse(isKochCharacterUnlocked("<SK>", 39))
+        assertFalse(isKochCharacterUnlocked("<AR>", 39))
+    }
+
+    @Test
+    fun isKochCharacterUnlocked_withDynamicAvailableCharactersSubset() {
+        val subset = listOf("K", "M", ".")
+        assertTrue(isKochCharacterUnlocked("K", 1, subset))
+        assertTrue(isKochCharacterUnlocked("M", 1, subset))
+        assertTrue(isKochCharacterUnlocked(".", 1, subset))
+
+        assertFalse(isKochCharacterUnlocked("R", 1, subset))
+        assertFalse(isKochCharacterUnlocked("<BT>", 1, subset))
+        assertFalse(isKochCharacterUnlocked("=", 1, subset))
+        assertFalse(isKochCharacterUnlocked("<SK>", 1, subset))
+        assertFalse(isKochCharacterUnlocked("<AR>", 1, subset))
     }
 
     @Test
     fun unknownCharacter_isNotUnlocked() {
-        assertFalse(isKochCharacterUnlocked("UNKNOWN", 42))
-        assertFalse(isKochCharacterUnlocked("@", 42))
+        assertFalse(isKochCharacterUnlocked("UNKNOWN", 39))
+        assertFalse(isKochCharacterUnlocked("@", 39))
     }
 }

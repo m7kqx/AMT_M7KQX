@@ -588,8 +588,8 @@ private fun TrainDrillSummaryContent(
                         valueColor = MaterialTheme.colorScheme.onSurface
                     )
                     ScoreMetricTile(
-                        title = "Koch Level",
-                        value = "${uiState.activeKochLevel}",
+                        title = if (uiState.trainingMode == TrainingMode.Prosigns) "Prosign Level" else "Koch Level",
+                        value = "${uiState.currentLevel}",
                         valueColor = MaterialTheme.colorScheme.primary
                     )
                 }
@@ -611,7 +611,7 @@ private fun TrainDrillSummaryContent(
                     ) {
                         Column {
                             Text(
-                                text = "Career Koch Accuracy",
+                                text = if (uiState.trainingMode == TrainingMode.Prosigns) "Career Prosign Accuracy" else "Career Koch Accuracy",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -803,7 +803,11 @@ fun TrainScreenContent(
                         }
                     }
                     Text(
-                        text = "Active characters for Koch Level ${uiState.activeKochLevel}",
+                        text = if (uiState.trainingMode == TrainingMode.Prosigns) {
+                            "Active characters for Prosigns Level ${uiState.activeProsignLevel}"
+                        } else {
+                            "Active characters for Koch Level ${uiState.activeKochLevel}"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -894,11 +898,15 @@ fun TrainScreenContent(
                 .padding(bottom = 2.dp)
         ) { _ ->
             KochKeyboard(
-                currentKochLevel = if (uiState.trainingMode == TrainingMode.Prosigns) 40 else uiState.activeKochLevel,
+                currentKochLevel = if (uiState.trainingMode == TrainingMode.Prosigns) 39 else uiState.activeKochLevel,
+                availableCharacters = if (uiState.trainingMode == TrainingMode.Prosigns) null else uiState.availableCharacters?.filter { char ->
+                    val clean = char.replace("<", "").replace(">", "").uppercase()
+                    clean !in listOf("BT", "SK", "AR") && char != "="
+                },
                 onCharacterClick = { char -> 
                     if (uiState.trainingMode == TrainingMode.Prosigns) {
                         if (uiState.drillState == DrillState.DrillActive) {
-                            onUpdateProsignTextInput(uiState.prosignTextInput + char)
+                            onUpdateProsignTextInput(uiState.prosignTextInput + char.replace("<", "").replace(">", ""))
                         }
                     } else {
                         onGuess(char)

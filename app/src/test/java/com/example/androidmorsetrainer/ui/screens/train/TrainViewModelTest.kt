@@ -53,6 +53,10 @@ class FakeProfileRepository : ProfileRepository {
         profilesFlow.update { list -> list.map { if (it.id == profile.id) profile else it } }
     }
 
+    override suspend fun updatePreferredWpm(profileId: Long, wpm: Int) {
+        profilesFlow.update { list -> list.map { if (it.id == profileId) it.copy(preferredWpm = wpm) else it } }
+    }
+
     override suspend fun deleteProfile(profile: UserProfile) {
         profilesFlow.update { list -> list.filterNot { it.id == profile.id } }
         characterStatsMap.keys.removeAll { it.first == profile.id }
@@ -973,5 +977,61 @@ class TrainViewModelTest {
         assertEquals(1, persistedStat?.successfulChallenges)
         assertEquals(1, persistedStat?.correctCount)
         assertEquals(1, persistedStat?.totalAttempts)
+    }
+
+    @Test
+    fun setTrainingMode_prosigns_updatesAvailableCharactersAndProgression() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        // Default mode is Koch
+        assertEquals(TrainingMode.Koch, viewModel.uiState.value.trainingMode)
+        assertEquals(listOf("K", "M"), viewModel.uiState.value.availableCharacters)
+        assertEquals(1, viewModel.uiState.value.currentLevel)
+
+        // Switch to Prosigns mode
+        viewModel.setTrainingMode(TrainingMode.Prosigns)
+        advanceUntilIdle()
+
+        val prosignState = viewModel.uiState.value
+        assertEquals(TrainingMode.Prosigns, prosignState.trainingMode)
+        assertEquals(testProfile.currentProsignLevel, prosignState.activeProsignLevel)
+        assertEquals(1, prosignState.currentLevel)
+        assertEquals(listOf(MorseConstants.PROSIGNS_SEQUENCE[0]), prosignState.availableCharacters)
+    }
+
+    @Test
+    fun submitGuess_prosignReceiveTraining_evaluatesImmediatelyWithoutLengthRestriction() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        viewModel.setTrainingMode(TrainingMode.Prosigns)
+        advanceUntilIdle()
+
+        viewModel.startLesson(10)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.isSessionActive)
+        val target = state.targetCharacter
+        assertTrue(target.isNotEmpty())
+
+        // Target at Level 1 is PROSIGNS_SEQUENCE[0] which is "<AR>"
+        assertEquals("<AR>", target)
+        assertEquals(0, viewModel.uiState.value.sessionTotalAttempts)
+
+        // Submitting just "A" (short partial input, 1 char vs 2) should evaluate immediately rather than waiting
+        viewModel.submitGuess("A")
+        testScheduler.runCurrent()
+
+        val stateShowingResult = viewModel.uiState.value
+        assertEquals(DrillState.ShowingResult, stateShowingResult.drillState)
+        assertEquals(1, stateShowingResult.sessionTotalAttempts)
+        assertEquals(false, stateShowingResult.lastGuessWasCorrect)
+
+        // After the 1.5s result display, it advances to the next challenge
+        testScheduler.advanceTimeBy(1600)
+        advanceUntilIdle()
+        assertEquals(2, viewModel.uiState.value.currentChallengeIndex)
     }
 }

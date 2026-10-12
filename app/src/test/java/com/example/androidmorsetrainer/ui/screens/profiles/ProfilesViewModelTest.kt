@@ -43,6 +43,10 @@ class FakeProfileRepository : ProfileRepository {
         profilesFlow.update { list -> list.map { if (it.id == profile.id) profile else it } }
     }
 
+    override suspend fun updatePreferredWpm(profileId: Long, wpm: Int) {
+        profilesFlow.update { list -> list.map { if (it.id == profileId) it.copy(preferredWpm = wpm) else it } }
+    }
+
     override suspend fun deleteProfile(profile: UserProfile) {
         profilesFlow.update { list -> list.filterNot { it.id == profile.id } }
     }

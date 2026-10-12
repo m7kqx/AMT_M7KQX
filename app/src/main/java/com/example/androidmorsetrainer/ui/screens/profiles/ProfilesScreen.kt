@@ -386,7 +386,7 @@ private fun ProfileCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "Level ${profile.currentKochLevel} of 42",
+                            text = "Level ${profile.currentKochLevel} of 40",
                             style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -396,7 +396,7 @@ private fun ProfileCard(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     LinearProgressIndicator(
-                        progress = { (profile.currentKochLevel / 42f).coerceIn(0f, 1f) },
+                        progress = { (profile.currentKochLevel / 40f).coerceIn(0f, 1f) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(6.dp)

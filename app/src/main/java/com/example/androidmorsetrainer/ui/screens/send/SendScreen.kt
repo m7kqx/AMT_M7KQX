@@ -211,7 +211,7 @@ private fun SendPreDrillSetupContent(
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                         Text(
-                            text = "Koch Level ${uiState.activeKochLevel} of 42",
+                            text = "Koch Level ${uiState.activeKochLevel} of 40",
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer

@@ -146,7 +146,7 @@ open class MorseAudioGenerator(
     /**
      * Plays a continuous sine wave tone for the given duration in milliseconds.
      */
-    suspend fun playTone(durationMs: Long) = withContext(defaultDispatcher) {
+    open suspend fun playTone(durationMs: Long) = withContext(defaultDispatcher) {
         if (durationMs <= 0) return@withContext
         val buffer = generateToneBuffer(durationMs, frequencyHz)
         writePcmBuffer(buffer)
@@ -155,7 +155,7 @@ open class MorseAudioGenerator(
     /**
      * Plays silence for the given duration in milliseconds.
      */
-    suspend fun playSilence(durationMs: Long) = withContext(defaultDispatcher) {
+    open suspend fun playSilence(durationMs: Long) = withContext(defaultDispatcher) {
         if (durationMs <= 0) return@withContext
         val buffer = generateSilenceBuffer(durationMs)
         writePcmBuffer(buffer)
@@ -164,7 +164,7 @@ open class MorseAudioGenerator(
     /**
      * Plays a single Dit (1 unit duration at current WPM).
      */
-    suspend fun playDit() {
+    open suspend fun playDit() {
         val ditDuration = MorseConstants.calculateUnitDurationMs(wpm)
         playTone(ditDuration)
     }
@@ -172,28 +172,86 @@ open class MorseAudioGenerator(
     /**
      * Plays a single Dah (3 unit durations at current WPM).
      */
-    suspend fun playDah() {
+    open suspend fun playDah() {
         val dahDuration = MorseConstants.calculateDahDurationMs(wpm)
         playTone(dahDuration)
     }
 
     /**
-     * Plays a Morse pattern of dots and dashes (e.g. ".-") for a single character.
-     * Includes intra-character element spaces between dits and dahs.
+     * Converts a bracketed prosign (e.g., "<SK>", "<AR>") into a single continuous sequence
+     * of dits and dahs without spaces, so it can be transmitted with only 1-unit intra-character
+     * pauses between elements and bypassing the 3-unit inter-character pause.
+     */
+    fun getProsignMorsePattern(prosign: String): String? {
+        val trimmed = prosign.trim()
+        if (!trimmed.startsWith("<") || !trimmed.endsWith(">") || trimmed.length < 3) {
+            return null
+        }
+        val inner = trimmed.substring(1, trimmed.length - 1).uppercase()
+        val sb = StringBuilder()
+        for (ch in inner) {
+            val morse = MorseConstants.MORSE_MAP[ch.toString()] ?: return null
+            sb.append(morse.replace(" ", ""))
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Tokenizes an input string into bracketed prosigns (e.g. "<SK>"), words/letters, and spaces.
+     */
+    fun tokenizeInputString(input: String): List<String> {
+        val tokens = mutableListOf<String>()
+        val regex = Regex("""<[A-Za-z0-9]+>|\s+|\S""")
+        val matches = regex.findAll(input)
+        for (match in matches) {
+            val value = match.value
+            if (value.isBlank()) {
+                tokens.add(" ")
+            } else {
+                tokens.add(value)
+            }
+        }
+        return tokens
+    }
+
+    /**
+     * Plays a Morse pattern of dots and dashes (e.g. ".-" or space-separated "-.-. --.-").
+     * Applies standard timing:
+     * - Dit duration = 1 unit (DIT_MULTIPLIER = 1)
+     * - Dah duration = 3 units (DAH_MULTIPLIER = 3)
+     * - Intra-character element spaces = 1 unit (INTRA_CHARACTER_SPACE_MULTIPLIER = 1)
+     * - Inter-character spaces between letter parts = 3 units (INTER_CHARACTER_SPACE_MULTIPLIER = 3)
+     * - Word space between words = 7 units (WORD_SPACE_MULTIPLIER = 7)
      */
     suspend fun playMorsePattern(pattern: String) = withContext(defaultDispatcher) {
         val elementSpace = MorseConstants.calculateElementSpaceMs(wpm)
-        for (i in pattern.indices) {
+        val charSpace = MorseConstants.calculateCharacterSpaceMs(wpm, farnsworthWpm)
+        val wordSpace = MorseConstants.calculateWordSpaceMs(wpm, farnsworthWpm)
+        val parts = pattern.split(" ")
+        for (p in parts.indices) {
             if (isStopping.get() || !isActive) break
+            val part = parts[p]
+            if (part == "/" || part.isEmpty()) {
+                playSilence(wordSpace)
+                continue
+            }
+            for (i in part.indices) {
+                if (isStopping.get() || !isActive) break
 
-            when (pattern[i]) {
-                '.' -> playDit()
-                '-' -> playDah()
+                when (part[i]) {
+                    '.' -> playDit()
+                    '-' -> playDah()
+                }
+
+                // Intra-character space between elements (except after the final element of this part)
+                if (i < part.length - 1) {
+                    playSilence(elementSpace)
+                }
             }
 
-            // Intra-character space between elements (except after the final element)
-            if (i < pattern.length - 1) {
-                playSilence(elementSpace)
+            // Inter-character space between parts
+            if (p < parts.size - 1 && parts[p + 1] != "/" && parts[p + 1].isNotEmpty()) {
+                playSilence(charSpace)
             }
         }
     }
@@ -241,11 +299,64 @@ open class MorseAudioGenerator(
     }
 
     private suspend fun playCharacterInternal(character: String) {
-        val pattern = MorseConstants.MORSE_MAP[character.uppercase()]
-        if (pattern != null) {
-            playMorsePattern(pattern)
-        } else if (character == " ") {
+        val trimmed = character.trim()
+
+        if (character == " " || (character.isNotEmpty() && character.isBlank())) {
+            // Space in the input string triggers the 7-unit silence delay (WORD_SPACE_MULTIPLIER)
             playSilence(MorseConstants.calculateWordSpaceMs(wpm, farnsworthWpm))
+            return
+        }
+
+        if (character.contains(" ")) {
+            val tokens = tokenizeInputString(character)
+            val charSpace = MorseConstants.calculateCharacterSpaceMs(wpm, farnsworthWpm)
+            val wordSpace = MorseConstants.calculateWordSpaceMs(wpm, farnsworthWpm)
+            for (i in tokens.indices) {
+                if (isStopping.get() || !kotlin.coroutines.coroutineContext.isActive) break
+                val tok = tokens[i]
+                if (tok == " ") {
+                    playSilence(wordSpace)
+                } else {
+                    playCharacterInternal(tok)
+                    if (i < tokens.size - 1 && tokens[i + 1] != " ") {
+                        playSilence(charSpace)
+                    }
+                }
+            }
+            return
+        }
+
+        // Bracketed prosign (e.g., <SK>, <AR>): concatenated into a single continuous sequence
+        // of dits and dahs, applying only the 1-unit intra-character pause between elements
+        // and bypassing the 3-unit inter-character pause.
+        if (trimmed.startsWith("<") && trimmed.endsWith(">") && trimmed.length > 2) {
+            val prosignPattern = getProsignMorsePattern(trimmed)
+                ?: MorseConstants.MORSE_MAP[trimmed.uppercase()]?.replace(" ", "")
+            if (prosignPattern != null) {
+                playMorsePattern(prosignPattern)
+                return
+            }
+        }
+
+        val upper = trimmed.uppercase()
+        val directPattern = MorseConstants.MORSE_MAP[upper]
+        if (directPattern != null) {
+            playMorsePattern(directPattern)
+            return
+        }
+
+        // Parse multi-character sequence / abbreviation if not directly mapped
+        val charSpace = MorseConstants.calculateCharacterSpaceMs(wpm, farnsworthWpm)
+        val clean = upper.replace("<", "").replace(">", "")
+        val parts = clean.mapNotNull { MorseConstants.MORSE_MAP[it.toString()] }
+        if (parts.isNotEmpty()) {
+            for (i in parts.indices) {
+                if (isStopping.get() || !kotlin.coroutines.coroutineContext.isActive) break
+                playMorsePattern(parts[i])
+                if (i < parts.size - 1) {
+                    playSilence(charSpace)
+                }
+            }
         }
     }
 
@@ -271,7 +382,7 @@ open class MorseAudioGenerator(
                     if (isStopping.get() || !isActive) break
 
                     val char = characters[i]
-                    if (char == " ") {
+                    if (char == " " || char.isBlank()) {
                         playSilence(wordSpace)
                         continue
                     }
@@ -279,7 +390,7 @@ open class MorseAudioGenerator(
                     onCharacterPlayed?.invoke(char)
                     playCharacterInternal(char)
 
-                    if (i < characters.size - 1 && characters[i + 1] != " ") {
+                    if (i < characters.size - 1 && characters[i + 1] != " " && characters[i + 1].isNotBlank()) {
                         playSilence(charSpace)
                     }
                 }
@@ -291,6 +402,19 @@ open class MorseAudioGenerator(
                 _isPlaying.value = false
             }
         }
+    }
+
+    /**
+     * Plays a complete string of Morse characters, words, and bracketed prosigns (e.g. "CQ DE <SK>").
+     * Spaces in the input string trigger the standard 7-unit silence delay.
+     * Bracketed prosigns are concatenated into a single continuous sequence bypassing the 3-unit pause.
+     */
+    open suspend fun playString(
+        input: String,
+        onCharacterPlayed: ((String) -> Unit)? = null
+    ) {
+        val tokens = tokenizeInputString(input)
+        playSequence(tokens, onCharacterPlayed)
     }
 
     private suspend fun writePcmBuffer(buffer: ShortArray) = withContext(defaultDispatcher) {

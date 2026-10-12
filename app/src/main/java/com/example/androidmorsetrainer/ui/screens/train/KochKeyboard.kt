@@ -1,5 +1,6 @@
 package com.example.androidmorsetrainer.ui.screens.train
 
+import com.example.androidmorsetrainer.morse.MorseConstants
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,28 +36,44 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Standard Koch sequence of 40 characters.
+ * Standard Koch sequence of 40 characters:
+ * 26 letters, 10 digits, and 4 punctuation symbols (., ,, /, ?).
  */
-val EXTENDED_KOCH_SEQUENCE: List<String> = listOf(
-    "K", "M", "R", "S", "U", "A", "P", "T", "L", "O",
-    "W", "I", ".", "N", "J", "E", "F", "0", "Y", ",",
-    "V", "G", "5", "/", "Q", "9", "Z", "H", "3", "8",
-    "B", "?", "4", "2", "7", "C", "1", "D", "6", "X"
-)
+val EXTENDED_KOCH_SEQUENCE: List<String> = MorseConstants.KOCH_SEQUENCE
 
 /**
- * Fast O(1) index lookup mapping each character to its 0-indexed position in the extended Koch sequence.
+ * Fast O(1) index lookup mapping each character to its 0-indexed position in the Koch sequence.
  */
 val EXTENDED_KOCH_INDEX_MAP: Map<String, Int> = EXTENDED_KOCH_SEQUENCE
     .mapIndexed { index, char -> char to index }
     .toMap()
 
 /**
- * Evaluates whether a character is unlocked at the given Koch level.
+ * Evaluates whether a character is unlocked at the given Koch level or authorized characters subset.
  * Level 1 starts with 2 characters (indices 0 and 1: 'K' and 'M').
+ * Prosigns (<BT>, <SK>, <AR>) are excluded from the Koch progression.
  */
-fun isKochCharacterUnlocked(character: String, currentKochLevel: Int): Boolean {
-    val index = EXTENDED_KOCH_INDEX_MAP[character] ?: return false
+fun isKochCharacterUnlocked(
+    character: String,
+    currentKochLevel: Int,
+    availableCharacters: List<String>? = null
+): Boolean {
+    val cleanChar = character.replace("<", "").replace(">", "").uppercase()
+    // Prosigns are strictly excluded from the Koch keyboard progression
+    if (cleanChar in listOf("BT", "SK", "AR") || character == "=") {
+        return false
+    }
+
+    if (availableCharacters != null) {
+        return availableCharacters.any { auth ->
+            val cleanAuth = auth.replace("<", "").replace(">", "").uppercase()
+            cleanAuth !in listOf("BT", "SK", "AR") && auth != "=" &&
+            (auth.uppercase() == character.uppercase() || cleanAuth == cleanChar)
+        }
+    }
+    val index = EXTENDED_KOCH_INDEX_MAP[character]
+        ?: EXTENDED_KOCH_INDEX_MAP[cleanChar]
+        ?: return false
     return index <= currentKochLevel
 }
 
@@ -75,14 +92,15 @@ private val KEYBOARD_ROW_4 = listOf("Z", "X", "C", "V", "B", "N", "M")
  * - Row 1: '1' through '0' (10 keys)
  * - Row 2: 'Q' through 'P' (10 keys)
  * - Row 3: 'A' through 'L' (9 keys with 0.5x horizontal padding on left & right)
- * - Row 4: 'Z' through 'M' (7 keys with 1.5x horizontal padding on left & right)
- * - Row 5: Action row: '?', ',', REPEAT (2.8x width), '.', '/' (1.8x width)
+ * - Row 4: 'Z' through 'M' (7 keys with 1.5x horizontal padding on left & right) + Backspace
+ * - Row 5: Action row: '?', ',', REPEAT (2.8x width), '.', '/' (1.8x width each for ?, ,, ., /)
  */
 @Composable
 fun KochKeyboard(
     currentKochLevel: Int,
     onCharacterClick: (String) -> Unit,
     modifier: Modifier = Modifier,
+    availableCharacters: List<String>? = null,
     onBackspaceClick: () -> Unit = {},
     onRepeatClick: () -> Unit = {},
     enabled: Boolean = true,
@@ -111,6 +129,7 @@ fun KochKeyboard(
                     KeyboardCharKey(
                         character = char,
                         currentKochLevel = currentKochLevel,
+                        availableCharacters = availableCharacters,
                         onCharacterClick = onCharacterClick,
                         enabled = enabled,
                         lastGuessedCharacter = lastGuessedCharacter,
@@ -129,6 +148,7 @@ fun KochKeyboard(
                     KeyboardCharKey(
                         character = char,
                         currentKochLevel = currentKochLevel,
+                        availableCharacters = availableCharacters,
                         onCharacterClick = onCharacterClick,
                         enabled = enabled,
                         lastGuessedCharacter = lastGuessedCharacter,
@@ -148,6 +168,7 @@ fun KochKeyboard(
                     KeyboardCharKey(
                         character = char,
                         currentKochLevel = currentKochLevel,
+                        availableCharacters = availableCharacters,
                         onCharacterClick = onCharacterClick,
                         enabled = enabled,
                         lastGuessedCharacter = lastGuessedCharacter,
@@ -168,6 +189,7 @@ fun KochKeyboard(
                     KeyboardCharKey(
                         character = char,
                         currentKochLevel = currentKochLevel,
+                        availableCharacters = availableCharacters,
                         onCharacterClick = onCharacterClick,
                         enabled = enabled,
                         lastGuessedCharacter = lastGuessedCharacter,
@@ -183,7 +205,7 @@ fun KochKeyboard(
                 )
             }
 
-            // Row 5: Action row left-to-right: '?', ',', REPEAT, '.', '/'
+            // Row 5: Action row: '?', ',', REPEAT (2.8x width), '.', '/' (1.8x width each for ?, ,, ., /)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -192,6 +214,7 @@ fun KochKeyboard(
                 KeyboardCharKey(
                     character = "?",
                     currentKochLevel = currentKochLevel,
+                    availableCharacters = availableCharacters,
                     onCharacterClick = onCharacterClick,
                     enabled = enabled,
                     lastGuessedCharacter = lastGuessedCharacter,
@@ -204,6 +227,7 @@ fun KochKeyboard(
                 KeyboardCharKey(
                     character = ",",
                     currentKochLevel = currentKochLevel,
+                    availableCharacters = availableCharacters,
                     onCharacterClick = onCharacterClick,
                     enabled = enabled,
                     lastGuessedCharacter = lastGuessedCharacter,
@@ -224,6 +248,7 @@ fun KochKeyboard(
                 KeyboardCharKey(
                     character = ".",
                     currentKochLevel = currentKochLevel,
+                    availableCharacters = availableCharacters,
                     onCharacterClick = onCharacterClick,
                     enabled = enabled,
                     lastGuessedCharacter = lastGuessedCharacter,
@@ -236,6 +261,7 @@ fun KochKeyboard(
                 KeyboardCharKey(
                     character = "/",
                     currentKochLevel = currentKochLevel,
+                    availableCharacters = availableCharacters,
                     onCharacterClick = onCharacterClick,
                     enabled = enabled,
                     lastGuessedCharacter = lastGuessedCharacter,
@@ -257,6 +283,7 @@ private fun RowScope.KeyboardCharKey(
     currentKochLevel: Int,
     onCharacterClick: (String) -> Unit,
     modifier: Modifier = Modifier,
+    availableCharacters: List<String>? = null,
     label: String = character,
     weight: Float = 1.0f,
     enabled: Boolean = true,
@@ -265,8 +292,7 @@ private fun RowScope.KeyboardCharKey(
     height: Dp = 46.dp,
     shape: Shape = RoundedCornerShape(8.dp)
 ) {
-    val kochIndex = EXTENDED_KOCH_INDEX_MAP[character] ?: Int.MAX_VALUE
-    val isUnlocked = kochIndex <= currentKochLevel
+    val isUnlocked = isKochCharacterUnlocked(character, currentKochLevel, availableCharacters)
     val isClickable = isUnlocked && enabled
 
     val isLastGuessed = lastGuessedCharacter?.equals(character, ignoreCase = true) == true
@@ -310,10 +336,18 @@ private fun RowScope.KeyboardCharKey(
         ) {
             Text(
                 text = label,
-                style = if (label.length > 1) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleMedium,
+                style = if (label.length > 2) {
+                    MaterialTheme.typography.labelSmall
+                } else if (label.length > 1) {
+                    MaterialTheme.typography.labelMedium
+                } else {
+                    MaterialTheme.typography.titleMedium
+                },
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
-                color = contentColor
+                color = contentColor,
+                maxLines = 1,
+                softWrap = false
             )
         }
     }

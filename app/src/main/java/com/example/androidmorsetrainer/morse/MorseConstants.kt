@@ -56,25 +56,36 @@ object MorseConstants {
         "/" to "-..-.",
         "?" to "..--..",
 
-        // Prosigns (procedural signals)
+        // Bracketed aliases for resilience
+        "<DE>" to "-.. .",
+        "<PSE>" to ".--. ... .",
+        "<UR>" to "..- .-.",
+        "<RST>" to ".-. ... -",
+        "<CQ>" to "-.-. --.-",
+
+        // Prosigns (procedural signals) and common abbreviations
         "<BT>" to "-...-",   // Break / pause between sections
         "<SK>" to "...-.-",  // Silent Key / End of transmission
         "<AR>" to ".-.-.",   // End of message
         "<KN>" to "-.--.",   // Over, only to the station called
-        "<AS>" to ".-..."    // Wait
+        "<AS>" to ".-...",   // Wait
+        "DE" to "-.. .",     // From (prosign/abbreviation)
+        "PSE" to ".--. ... .", // Please
+        "UR" to "..- .-.",   // Your
+        "RST" to ".-. ... -", // Signal report
+        "CQ" to "-.-. --.-"  // Calling any station
     )
 
     val REVERSE_MORSE_MAP: Map<String, String> = MORSE_MAP.entries.associate { (k, v) -> v to k }
 
     /**
-     * Standard Koch character progression sequence (43 characters total).
+     * Standard Koch character progression sequence (40 characters total).
      */
     val KOCH_SEQUENCE: List<String> = listOf(
         "K", "M", "R", "S", "U", "A", "P", "T", "L", "O",
         "W", "I", ".", "N", "J", "E", "F", "0", "Y", ",",
         "V", "G", "5", "/", "Q", "9", "Z", "H", "3", "8",
-        "B", "?", "4", "2", "7", "C", "1", "D", "6", "X",
-        "<AR>"
+        "B", "?", "4", "2", "7", "C", "1", "D", "6", "X"
     )
 
     /**
@@ -84,6 +95,13 @@ object MorseConstants {
         "<AR>", "<BT>", "<SK>", "<KN>", "<AS>", "CQ", "DE", "K", "R", "PSE", "UR", "RST"
     )
 
+    // Base timing multipliers enforcing standard 1-3-7 Morse timing
+    const val DIT_MULTIPLIER = 1
+    const val DAH_MULTIPLIER = 3
+    const val INTRA_CHARACTER_SPACE_MULTIPLIER = 1
+    const val INTER_CHARACTER_SPACE_MULTIPLIER = 3
+    const val WORD_SPACE_MULTIPLIER = 7
+
     /**
      * Standard PARIS timing standard:
      * "PARIS " consists of 50 unit lengths (including inter-word spacing).
@@ -91,21 +109,21 @@ object MorseConstants {
      */
     fun calculateUnitDurationMs(wpm: Int): Long {
         require(wpm > 0) { "WPM must be greater than 0" }
-        return (1200.0 / wpm).toLong().coerceAtLeast(1L)
+        return ((1200.0 / wpm) * DIT_MULTIPLIER).toLong().coerceAtLeast(1L)
     }
 
     /**
      * Calculate dah duration (3 units).
      */
     fun calculateDahDurationMs(wpm: Int): Long {
-        return calculateUnitDurationMs(wpm) * 3
+        return calculateUnitDurationMs(wpm) * DAH_MULTIPLIER
     }
 
     /**
      * Intra-character space (between dits and dahs of the same character) = 1 unit.
      */
     fun calculateElementSpaceMs(wpm: Int): Long {
-        return calculateUnitDurationMs(wpm)
+        return calculateUnitDurationMs(wpm) * INTRA_CHARACTER_SPACE_MULTIPLIER
     }
 
     /**
@@ -113,9 +131,9 @@ object MorseConstants {
      */
     fun calculateCharacterSpaceMs(charWpm: Int, farnsworthWpm: Int? = null): Long {
         return if (farnsworthWpm != null && farnsworthWpm < charWpm) {
-            calculateUnitDurationMs(farnsworthWpm) * 3
+            calculateUnitDurationMs(farnsworthWpm) * INTER_CHARACTER_SPACE_MULTIPLIER
         } else {
-            calculateUnitDurationMs(charWpm) * 3
+            calculateUnitDurationMs(charWpm) * INTER_CHARACTER_SPACE_MULTIPLIER
         }
     }
 
@@ -124,9 +142,9 @@ object MorseConstants {
      */
     fun calculateWordSpaceMs(charWpm: Int, farnsworthWpm: Int? = null): Long {
         return if (farnsworthWpm != null && farnsworthWpm < charWpm) {
-            calculateUnitDurationMs(farnsworthWpm) * 7
+            calculateUnitDurationMs(farnsworthWpm) * WORD_SPACE_MULTIPLIER
         } else {
-            calculateUnitDurationMs(charWpm) * 7
+            calculateUnitDurationMs(charWpm) * WORD_SPACE_MULTIPLIER
         }
     }
 }

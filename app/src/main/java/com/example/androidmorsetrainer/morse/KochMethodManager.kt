@@ -36,15 +36,15 @@ class KochMethodManager(
     }
 
     /**
-     * Complete Koch sequence of 43 characters:
-     * K, M, R, S, U, A, P, T, L, O, W, I, . , N, J, E, F, 0, Y, ,, V, G, 5, /, Q, 9, Z, H, 3, 8, B, ?, 4, 2, 7, C, 1, D, 6, X, <BT>, <SK>, <AR>
+     * Complete Koch sequence of 40 characters:
+     * K, M, R, S, U, A, P, T, L, O, W, I, . , N, J, E, F, 0, Y, ,, V, G, 5, /, Q, 9, Z, H, 3, 8, B, ?, 4, 2, 7, C, 1, D, 6, X
      */
     val sequence: List<String> = MorseConstants.KOCH_SEQUENCE
 
     /**
      * Koch method starts at Level 1 with 2 characters ("K", "M").
      * Each subsequent level introduces 1 new character.
-     * Maximum level is sequence.size - 1 (Level 40, having all 41 characters).
+     * Maximum level is sequence.size - 1 (Level 39, having all 40 characters).
      */
     val minLevel: Int = 1
     val maxLevel: Int = sequence.size - 1

@@ -127,28 +127,38 @@ class TrainViewModel(
         val successes = characterSuccessCounts[upper] ?: 0
         if (successes >= VISUAL_AID_SUCCESS_THRESHOLD) return false
 
-        return if (level == 1) {
-            (upper == "K" || upper == "M") && upper !in mastered
+        return if (_uiState.value.trainingMode == TrainingMode.Prosigns) {
+            val latest = MorseConstants.PROSIGNS_SEQUENCE.getOrNull(level - 1)?.uppercase()
+            upper == latest && upper !in mastered
         } else {
-            val latest = kochMethodManager.getLatestCharacterForLevel(level).uppercase()
-            upper == latest
+            if (level == 1) {
+                (upper == "K" || upper == "M") && upper !in mastered
+            } else {
+                val latest = kochMethodManager.getLatestCharacterForLevel(level).uppercase()
+                upper == latest
+            }
         }
     }
 
     /**
      * Determines the active newly introduced character at the given level that has not yet met proficiency.
-     * At level 1, characters are ["K", "M"] (checks "K", then "M").
-     * At level > 1, the new character is the latest character for that level.
+     * In Prosigns mode, checks the prosign introduced at that level.
+     * In Koch mode: At level 1, characters are ["K", "M"] (checks "K", then "M"); at level > 1, checks latest character.
      */
     private suspend fun determineActiveNewCharacter(
         profileId: Long,
         level: Int,
         mastered: Set<String>
     ): String? {
-        val candidates = if (level == 1) {
-            listOf("K", "M")
+        val candidates = if (_uiState.value.trainingMode == TrainingMode.Prosigns) {
+            val char = MorseConstants.PROSIGNS_SEQUENCE.getOrNull(level - 1)
+            if (char != null) listOf(char) else emptyList()
         } else {
-            listOf(kochMethodManager.getLatestCharacterForLevel(level))
+            if (level == 1) {
+                listOf("K", "M")
+            } else {
+                listOf(kochMethodManager.getLatestCharacterForLevel(level))
+            }
         }
 
         for (char in candidates) {
@@ -207,6 +217,7 @@ class TrainViewModel(
             return
         }
 
+        val mode = _uiState.value.trainingMode
         val currentProfile = _uiState.value.activeProfile
         if (currentProfile?.id == profile.id) {
             // Same profile: If a drill session is currently running (active or showing result),
@@ -215,8 +226,15 @@ class TrainViewModel(
                 _uiState.update { it.copy(activeProfile = profile) }
                 return
             }
-            // If in setup or finished state and the Koch level has not changed, just update the profile reference
-            if (currentProfile.currentKochLevel == profile.currentKochLevel) {
+            // If in setup or finished state and the level and character pool for the active mode have not changed, just update the profile reference
+            val currentModeLevel = if (mode == TrainingMode.Prosigns) profile.currentProsignLevel else profile.currentKochLevel
+            val activeModeLevel = if (mode == TrainingMode.Prosigns) _uiState.value.activeProsignLevel else _uiState.value.activeKochLevel
+            val expectedPool = getCharactersForMode(mode, currentModeLevel)
+            if (currentProfile.currentKochLevel == profile.currentKochLevel &&
+                currentProfile.currentProsignLevel == profile.currentProsignLevel &&
+                currentModeLevel == activeModeLevel &&
+                _uiState.value.availableCharacters == expectedPool
+            ) {
                 _uiState.update { it.copy(activeProfile = profile) }
                 return
             }
@@ -226,7 +244,6 @@ class TrainViewModel(
         playbackJob?.cancel()
         audioGenerator.stop()
 
-        val mode = _uiState.value.trainingMode
         val level = if (mode == TrainingMode.Prosigns) profile.currentProsignLevel else profile.currentKochLevel
         val pool = getCharactersForMode(mode, level)
 
@@ -533,22 +550,14 @@ class TrainViewModel(
         if (target.isEmpty() || currentState.drillState != DrillState.DrillActive) return
 
         val strippedTarget = target.replace("<", "").replace(">", "")
-        val isTargetMultiChar = strippedTarget.length > 1
+        val cleanGuess = guessedCharacter.replace("<", "").replace(">", "").trim()
 
-        if (isTargetMultiChar) {
-            receiveGuessBuffer += guessedCharacter
-            if (receiveGuessBuffer.length < strippedTarget.length) {
-                // Wait for more input, optionally you can update UI to show partial input
-                return
-            }
-        } else {
-            receiveGuessBuffer = guessedCharacter
-        }
-
-        val finalGuess = receiveGuessBuffer
+        val finalGuess = cleanGuess
         receiveGuessBuffer = ""
 
-        val isCorrect = finalGuess.equals(strippedTarget, ignoreCase = true)
+        val isCorrect = finalGuess.equals(strippedTarget, ignoreCase = true) ||
+            finalGuess.equals(target, ignoreCase = true) ||
+            guessedCharacter.trim().equals(target, ignoreCase = true)
         Log.d(TAG, "Guess submitted: '$finalGuess', Target: '$target', stripped: '$strippedTarget', isCorrect=$isCorrect, index=${currentState.currentChallengeIndex}/${currentState.sessionBatchSize}")
 
         guessJob?.cancel()
@@ -828,7 +837,7 @@ class TrainViewModel(
         playbackJob?.cancel()
         audioGenerator.stop()
         viewModelScope.launch(ioDispatcher) {
-            val level = _uiState.value.activeKochLevel
+            val level = _uiState.value.currentLevel
             sessionCharacterAttempts.clear()
             val nextTarget = pickNextTarget(profile.id, level)
             val isSessionActive = _uiState.value.drillState == DrillState.DrillActive || _uiState.value.drillState == DrillState.ShowingResult
@@ -909,7 +918,7 @@ class TrainViewModel(
             val overallAcc = if (profileId != null) calculateOverallAccuracy(profileId) else currentState.overallAccuracy
             sessionCharacterAttempts.clear()
             val mastered = if (profileId != null) loadMasteredCharacters(profileId) else emptySet()
-            val newChar = if (profileId != null) determineActiveNewCharacter(profileId, currentState.activeKochLevel, mastered) else null
+            val newChar = if (profileId != null) determineActiveNewCharacter(profileId, currentState.currentLevel, mastered) else null
             val dotRep = if (newChar != null) kochMethodManager.getMorseCode(newChar) else null
             val successCount = if (newChar != null) (characterSuccessCounts[newChar.uppercase()] ?: 0) else 0
             val isVisualAidActive = newChar != null && successCount < VISUAL_AID_SUCCESS_THRESHOLD
