@@ -4,7 +4,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
@@ -40,11 +42,29 @@ open class MorseDSPManager(
     val blockSize: Int = 512,
     squelchThreshold: Double = DEFAULT_THRESHOLD,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
+    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    audioManager: AudioManager? = null
 ) {
+    open val audioManager: AudioManager? = audioManager ?: (context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+
     @Volatile
     var squelchThreshold: Double = squelchThreshold
         private set
+
+    @Volatile
+    open var isDecodingActive: Boolean = false
+        set(value) {
+            field = value
+            _dspState.update { it.copy(isDecodingActive = value) }
+            if (!value) {
+                _dspState.update {
+                    it.copy(
+                        isTonePresent = false,
+                        currentMagnitude = 0.0
+                    )
+                }
+            }
+        }
 
     companion object {
         private const val TAG = "MorseDSP"
@@ -80,6 +100,7 @@ open class MorseDSPManager(
 
     data class DSPState(
         val isListening: Boolean = false,
+        val isDecodingActive: Boolean = false,
         val isTonePresent: Boolean = false,
         val isCalibrating: Boolean = false,
         val currentMagnitude: Double = 0.0,
@@ -204,12 +225,77 @@ open class MorseDSPManager(
     }
 
     /**
+     * Checks if the given [AudioDeviceInfo] is a Bluetooth input microphone.
+     */
+    open fun isBluetoothDevice(device: AudioDeviceInfo): Boolean {
+        return device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+               (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && device.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+    }
+
+    /**
+     * Checks if the given [AudioDeviceInfo] is a USB input microphone.
+     */
+    open fun isUsbDevice(device: AudioDeviceInfo): Boolean {
+        return device.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
+               device.type == AudioDeviceInfo.TYPE_USB_ACCESSORY ||
+               (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O && device.type == AudioDeviceInfo.TYPE_USB_HEADSET)
+    }
+
+    /**
+     * Discovers external input audio devices (Bluetooth or USB)
+     * using [AudioManager.getDevices] with [AudioManager.GET_DEVICES_INPUTS].
+     */
+    open fun discoverExternalAudioDevices(): List<AudioDeviceInfo> {
+        val am = audioManager ?: return emptyList()
+        val devices = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        return devices.filter { isBluetoothDevice(it) || isUsbDevice(it) }
+    }
+
+    open fun getExternalAudioDevices(): List<AudioDeviceInfo> = discoverExternalAudioDevices()
+
+    open fun checkExternalAudioDevices(): List<AudioDeviceInfo> = discoverExternalAudioDevices()
+
+    /**
+     * Routes audio capture to external devices (Bluetooth or USB).
+     * - If a Bluetooth microphone is detected, invokes [AudioManager.startBluetoothSco] and [AudioManager.setBluetoothScoOn].
+     * - If a USB microphone is detected, applies [AudioRecord.setPreferredDevice] targeting the USB peripheral.
+     */
+    @SuppressLint("MissingPermission")
+    @Suppress("DEPRECATION")
+    open fun routeAudio(record: AudioRecord?): AudioDeviceInfo? {
+        val am = audioManager ?: return null
+        val devices = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+
+        val bluetoothDevice = devices.firstOrNull { isBluetoothDevice(it) }
+        val usbDevice = devices.firstOrNull { isUsbDevice(it) }
+
+        if (bluetoothDevice != null) {
+            Log.d(TAG, "Bluetooth microphone detected: ${bluetoothDevice.productName}. Routing audio via Bluetooth SCO.")
+            am.startBluetoothSco()
+            am.setBluetoothScoOn(true)
+            return bluetoothDevice
+        } else if (usbDevice != null) {
+            Log.d(TAG, "USB microphone detected: ${usbDevice.productName}. Setting preferred device on AudioRecord.")
+            record?.setPreferredDevice(usbDevice)
+            return usbDevice
+        }
+
+        return null
+    }
+
+    open fun configureAudioRouting(record: AudioRecord?): AudioDeviceInfo? = routeAudio(record)
+
+    /**
      * Starts the audio capture and Goertzel DSP analysis pipeline.
      */
     @SuppressLint("MissingPermission")
     @Synchronized
     open fun startListening() {
-        if (_dspState.value.isListening) return
+        isDecodingActive = true
+        if (_dspState.value.isListening) {
+            _dspState.update { it.copy(isListening = true, isDecodingActive = true) }
+            return
+        }
 
         if (!hasRecordPermission()) {
             Log.e(TAG, "Failed to start listening: RECORD_AUDIO permission not granted")
@@ -236,6 +322,8 @@ open class MorseDSPManager(
             Log.e(TAG, "AudioRecord initialization failed")
             return
         }
+
+        routeAudio(audioRecord)
 
         audioRecord?.startRecording()
         audioChannel = Channel(capacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -273,6 +361,19 @@ open class MorseDSPManager(
             try {
                 for (buffer in audioChannel) {
                     if (!isActive) break
+
+                    if (!isDecodingActive) {
+                        if (toneActive) {
+                            toneActive = false
+                            _dspState.update {
+                                it.copy(
+                                    isTonePresent = false,
+                                    currentMagnitude = 0.0
+                                )
+                            }
+                        }
+                        continue
+                    }
 
                     _rawAudioFlow.tryEmit(buffer)
 
@@ -360,7 +461,7 @@ open class MorseDSPManager(
             }
         }
 
-        _dspState.update { it.copy(isListening = true) }
+        _dspState.update { it.copy(isListening = true, isDecodingActive = true) }
         Log.d(TAG, "MorseDSPManager listening started")
     }
 
@@ -368,8 +469,20 @@ open class MorseDSPManager(
      * Stops the audio recording and DSP analysis loops.
      */
     @Synchronized
+    @Suppress("DEPRECATION")
     open fun stopListening() {
-        if (!_dspState.value.isListening) return
+        isDecodingActive = false
+        if (!_dspState.value.isListening) {
+            _dspState.update {
+                it.copy(
+                    isListening = false,
+                    isDecodingActive = false,
+                    isTonePresent = false,
+                    currentMagnitude = 0.0
+                )
+            }
+            return
+        }
 
         try {
             captureJob?.cancel()
@@ -383,12 +496,25 @@ open class MorseDSPManager(
                 it.release()
             }
             audioRecord = null
+
+            try {
+                audioManager?.let { am ->
+                    if (am.isBluetoothScoOn) {
+                        am.setBluetoothScoOn(false)
+                        am.stopBluetoothSco()
+                        Log.d(TAG, "Bluetooth SCO stopped")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error stopping Bluetooth SCO: ${e.message}")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping AudioRecord: ${e.message}")
         } finally {
             _dspState.update {
                 it.copy(
                     isListening = false,
+                    isDecodingActive = false,
                     isTonePresent = false,
                     currentMagnitude = 0.0
                 )

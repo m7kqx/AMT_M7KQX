@@ -23,6 +23,10 @@ class KochMethodManager(
 ) {
 
     companion object {
+        const val MIN_LEVEL = MorseConstants.MIN_KOCH_LEVEL // 1
+        const val MAX_LEVEL = MorseConstants.MAX_KOCH_LEVEL // 39
+        const val TOTAL_LEVELS = MorseConstants.TOTAL_KOCH_LEVELS // 39
+
         const val PROMOTION_MIN_ATTEMPTS = 5
         const val PROMOTION_ACCURACY_PERCENT = 70.0f
         const val MASTERY_MIN_ATTEMPTS = 5
@@ -44,10 +48,17 @@ class KochMethodManager(
     /**
      * Koch method starts at Level 1 with 2 characters ("K", "M").
      * Each subsequent level introduces 1 new character.
-     * Maximum level is sequence.size - 1 (Level 39, having all 40 characters).
+     * Maximum level is 39 (sequence.size - 1, having all 40 characters).
      */
-    val minLevel: Int = 1
-    val maxLevel: Int = sequence.size - 1
+    val minLevel: Int = MIN_LEVEL
+    val maxLevel: Int = MAX_LEVEL
+
+    /**
+     * Validates and bounds a Koch level within valid progression limits (1 to 39).
+     */
+    fun clampLevel(level: Int): Int = level.coerceIn(minLevel, maxLevel)
+
+    fun isValidLevel(level: Int): Boolean = level in minLevel..maxLevel
 
     /**
      * Returns the list of active characters for the given Koch level.
@@ -56,7 +67,7 @@ class KochMethodManager(
      * Level L -> sequence[0 .. min(L + 1, sequence.size) - 1]
      */
     fun getCharactersForLevel(level: Int): List<String> {
-        val clampedLevel = level.coerceIn(minLevel, maxLevel)
+        val clampedLevel = clampLevel(level)
         val characterCount = min(clampedLevel + 1, sequence.size)
         return sequence.subList(0, characterCount)
     }
@@ -79,9 +90,17 @@ class KochMethodManager(
         if (MorseConstants.MORSE_MAP.containsKey(upper)) {
             return MorseConstants.MORSE_MAP[upper]
         }
-        // Check for multi-character sequences (e.g. CQ)
-        val parts = upper.mapNotNull { MorseConstants.MORSE_MAP[it.toString()] }
-        if (parts.size == upper.length) {
+        val clean = upper.replace("<", "").replace(">", "")
+        if (MorseConstants.MORSE_MAP.containsKey(clean)) {
+            return MorseConstants.MORSE_MAP[clean]
+        }
+        val bracketed = "<$clean>"
+        if (MorseConstants.MORSE_MAP.containsKey(bracketed)) {
+            return MorseConstants.MORSE_MAP[bracketed]
+        }
+        // Check for multi-character sequences (e.g. abbreviations without direct mapping)
+        val parts = clean.mapNotNull { MorseConstants.MORSE_MAP[it.toString()] }
+        if (parts.size == clean.length) {
             return parts.joinToString(" ")
         }
         return null

@@ -33,7 +33,10 @@ class MorseEngineUnitTest {
         val level2 = manager.getCharactersForLevel(2)
         assertEquals(listOf("K", "M", "R"), level2)
 
-        // Max level has all 40 characters
+        // Max level is 39, containing all 40 characters
+        assertEquals(39, manager.maxLevel)
+        assertEquals(39, MorseConstants.MAX_KOCH_LEVEL)
+        assertEquals(39, MorseConstants.TOTAL_KOCH_LEVELS)
         val maxLevel = manager.getCharactersForLevel(manager.maxLevel)
         assertEquals(40, maxLevel.size)
     }
@@ -270,10 +273,10 @@ class MorseEngineUnitTest {
         assertEquals(listOf(60L, 180L), tracker.tones)
 
         // 2. Test bracketed prosign <SK>: must be continuous 6 elements (...-.-) with only 1-unit silences (60ms)
-        // and 0 inter-character silences (180ms)
+        // and 0 inter-character silences (180ms) when useContinuousProsign = true
         tracker.tones.clear()
         tracker.silences.clear()
-        tracker.playCharacter("<SK>")
+        tracker.playCharacter("<SK>", useContinuousProsign = true)
         assertEquals(listOf(60L, 60L, 60L, 180L, 60L, 180L), tracker.tones)
         // The silences between elements must only be 60ms (1-unit intra-character pause), bypassing 3-unit (180ms)
         val interElementSilences = tracker.silences.filter { it != 400L }
@@ -281,10 +284,16 @@ class MorseEngineUnitTest {
         assertTrue("All pauses between <SK> elements must be 1 unit (60ms)", interElementSilences.all { it == 60L })
         assertFalse("3-unit pauses (180ms) must be bypassed in <SK>", tracker.silences.contains(180L))
 
-        // 3. Test bracketed prosign <AR>: continuous 5 elements (.-.-.) with only 1-unit silences (60ms)
+        // Also test <SK> with useContinuousProsign = false (standard 1:3:7 timing with 3-unit pause between letters)
         tracker.tones.clear()
         tracker.silences.clear()
-        tracker.playCharacter("<AR>")
+        tracker.playCharacter("<SK>", useContinuousProsign = false)
+        assertTrue("3-unit pauses (180ms) must be present between letters in standard 1:3:7 timing", tracker.silences.contains(180L))
+
+        // 3. Test bracketed prosign <AR>: continuous 5 elements (.-.-.) with only 1-unit silences (60ms) when useContinuousProsign = true
+        tracker.tones.clear()
+        tracker.silences.clear()
+        tracker.playCharacter("<AR>", useContinuousProsign = true)
         assertEquals(listOf(60L, 180L, 60L, 180L, 60L), tracker.tones)
         val arSilences = tracker.silences.filter { it != 400L }
         assertEquals(4, arSilences.size)

@@ -21,3 +21,13 @@ enum class NavigationTab(
     PROFILES("Profiles", Icons.Default.Person, "Navigate to User Profiles screen"),
     DEBUG("Debug", Icons.Default.Build, "Navigate to Debug screen")
 }
+
+/**
+ * Nested navigation destinations within the Training tab workflow.
+ */
+sealed class TrainDestination(val route: String, val title: String) {
+    data object ModeSelection : TrainDestination("train/mode_selection", "Mode Selection")
+    data object Setup : TrainDestination("train/setup", "Drill Setup")
+    data object ActiveDrill : TrainDestination("train/active", "Active Drill")
+    data object Summary : TrainDestination("train/summary", "Drill Summary")
+}

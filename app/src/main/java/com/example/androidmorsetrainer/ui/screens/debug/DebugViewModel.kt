@@ -45,7 +45,8 @@ class DebugViewModel(
 
     fun updateProfileKochLevel(profileId: Long, level: Int) {
         viewModelScope.launch {
-            profileRepository?.updateProfileKochLevel(profileId, level)
+            val clamped = level.coerceIn(com.example.androidmorsetrainer.morse.MorseConstants.MIN_KOCH_LEVEL, com.example.androidmorsetrainer.morse.MorseConstants.MAX_KOCH_LEVEL)
+            profileRepository?.updateProfileKochLevel(profileId, clamped)
         }
     }
 

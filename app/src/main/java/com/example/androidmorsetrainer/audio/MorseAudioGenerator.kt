@@ -178,22 +178,23 @@ open class MorseAudioGenerator(
     }
 
     /**
-     * Converts a bracketed prosign (e.g., "<SK>", "<AR>") into a single continuous sequence
-     * of dits and dahs without spaces, so it can be transmitted with only 1-unit intra-character
-     * pauses between elements and bypassing the 3-unit inter-character pause.
+     * Converts a prosign (e.g., "<SK>", "<AR>", "AR") into a Morse pattern.
+     * If [useContinuousProsign] is true, returns a single continuous sequence without spaces (0-unit inter-character pause).
+     * If [useContinuousProsign] is false, returns space-separated letter patterns (standard 3-unit inter-character pause).
      */
-    fun getProsignMorsePattern(prosign: String): String? {
+    fun getProsignMorsePattern(prosign: String, useContinuousProsign: Boolean = true): String? {
         val trimmed = prosign.trim()
-        if (!trimmed.startsWith("<") || !trimmed.endsWith(">") || trimmed.length < 3) {
+        val isBracketed = trimmed.startsWith("<") && trimmed.endsWith(">") && trimmed.length >= 3
+        val inner = if (isBracketed) trimmed.substring(1, trimmed.length - 1).uppercase() else trimmed.uppercase()
+        val parts = inner.mapNotNull { MorseConstants.MORSE_MAP[it.toString()] }
+        if (parts.size != inner.length || parts.isEmpty()) {
             return null
         }
-        val inner = trimmed.substring(1, trimmed.length - 1).uppercase()
-        val sb = StringBuilder()
-        for (ch in inner) {
-            val morse = MorseConstants.MORSE_MAP[ch.toString()] ?: return null
-            sb.append(morse.replace(" ", ""))
+        return if (useContinuousProsign) {
+            parts.joinToString("")
+        } else {
+            parts.joinToString(" ")
         }
-        return sb.toString()
     }
 
     /**
@@ -271,24 +272,34 @@ open class MorseAudioGenerator(
     }
 
     /**
-     * Plays a character or prosign (e.g. "K", "A", or "<BT>") with optional WPM speed override.
+     * Plays a character or prosign (e.g. "K", "A", or "<BT>") with optional WPM speed override
+     * and optional continuous prosign character spacing.
      */
-    open suspend fun playCharacter(character: String, speedWpm: Int?) {
+    open suspend fun playCharacter(
+        character: String,
+        speedWpm: Int?,
+        useContinuousProsign: Boolean = false
+    ) {
         speedWpm?.let { setWpm(it) }
-        playCharacter(character)
+        playCharacter(character, useContinuousProsign)
     }
 
     /**
      * Plays a character or prosign (e.g. "K", "A", or "<BT>").
+     * If [useContinuousProsign] is false, applies standard 3-unit inter-character spacing for prosigns.
+     * If [useContinuousProsign] is true, applies 0-unit inter-character spacing to blend prosign letters into one continuous sound.
      */
-    open suspend fun playCharacter(character: String) = withContext(defaultDispatcher) {
+    open suspend fun playCharacter(
+        character: String,
+        useContinuousProsign: Boolean = false
+    ) = withContext(defaultDispatcher) {
         playbackMutex.withLock {
             stop()
             isStopping.set(false)
             _isPlaying.value = true
             currentPhase = 0.0
             try {
-                playCharacterInternal(character)
+                playCharacterInternal(character, useContinuousProsign)
                 // Pad with silence to guarantee we exceed minBufferSize, forcing immediate hardware playback
                 // and ensuring the coroutine blocks until the tone has physically rendered.
                 playSilence(400)
@@ -298,7 +309,9 @@ open class MorseAudioGenerator(
         }
     }
 
-    private suspend fun playCharacterInternal(character: String) {
+    open suspend fun playCharacter(character: String) = playCharacter(character, false)
+
+    private suspend fun playCharacterInternal(character: String, useContinuousProsign: Boolean = false) {
         val trimmed = character.trim()
 
         if (character == " " || (character.isNotEmpty() && character.isBlank())) {
@@ -317,7 +330,7 @@ open class MorseAudioGenerator(
                 if (tok == " ") {
                     playSilence(wordSpace)
                 } else {
-                    playCharacterInternal(tok)
+                    playCharacterInternal(tok, useContinuousProsign)
                     if (i < tokens.size - 1 && tokens[i + 1] != " ") {
                         playSilence(charSpace)
                     }
@@ -326,16 +339,22 @@ open class MorseAudioGenerator(
             return
         }
 
-        // Bracketed prosign (e.g., <SK>, <AR>): concatenated into a single continuous sequence
-        // of dits and dahs, applying only the 1-unit intra-character pause between elements
-        // and bypassing the 3-unit inter-character pause.
-        if (trimmed.startsWith("<") && trimmed.endsWith(">") && trimmed.length > 2) {
-            val prosignPattern = getProsignMorsePattern(trimmed)
-                ?: MorseConstants.MORSE_MAP[trimmed.uppercase()]?.replace(" ", "")
-            if (prosignPattern != null) {
-                playMorsePattern(prosignPattern)
-                return
+        // Conditional spacing logic for prosigns:
+        // If useContinuousProsign is false, apply the standard 3-unit inter-character spacing.
+        // If true, apply 0-unit inter-character spacing to blend the prosign letters into one continuous sound.
+        val isBracketed = trimmed.startsWith("<") && trimmed.endsWith(">") && trimmed.length > 2
+        val clean = if (isBracketed) trimmed.substring(1, trimmed.length - 1).uppercase() else trimmed.uppercase()
+        val letterParts = clean.mapNotNull { MorseConstants.MORSE_MAP[it.toString()] }
+        val isProsign = (isBracketed || clean.length > 1) && letterParts.size == clean.length && letterParts.size > 1
+
+        if (isProsign) {
+            val pattern = if (useContinuousProsign) {
+                letterParts.joinToString("")
+            } else {
+                letterParts.joinToString(" ")
             }
+            playMorsePattern(pattern)
+            return
         }
 
         val upper = trimmed.uppercase()
@@ -347,13 +366,11 @@ open class MorseAudioGenerator(
 
         // Parse multi-character sequence / abbreviation if not directly mapped
         val charSpace = MorseConstants.calculateCharacterSpaceMs(wpm, farnsworthWpm)
-        val clean = upper.replace("<", "").replace(">", "")
-        val parts = clean.mapNotNull { MorseConstants.MORSE_MAP[it.toString()] }
-        if (parts.isNotEmpty()) {
-            for (i in parts.indices) {
+        if (letterParts.isNotEmpty()) {
+            for (i in letterParts.indices) {
                 if (isStopping.get() || !kotlin.coroutines.coroutineContext.isActive) break
-                playMorsePattern(parts[i])
-                if (i < parts.size - 1) {
+                playMorsePattern(letterParts[i])
+                if (i < letterParts.size - 1) {
                     playSilence(charSpace)
                 }
             }
@@ -366,6 +383,7 @@ open class MorseAudioGenerator(
      */
     suspend fun playSequence(
         characters: List<String>,
+        useContinuousProsign: Boolean = false,
         onCharacterPlayed: ((String) -> Unit)? = null
     ) = withContext(defaultDispatcher) {
         playbackMutex.withLock {
@@ -388,7 +406,7 @@ open class MorseAudioGenerator(
                     }
 
                     onCharacterPlayed?.invoke(char)
-                    playCharacterInternal(char)
+                    playCharacterInternal(char, useContinuousProsign)
 
                     if (i < characters.size - 1 && characters[i + 1] != " " && characters[i + 1].isNotBlank()) {
                         playSilence(charSpace)
@@ -404,18 +422,29 @@ open class MorseAudioGenerator(
         }
     }
 
+    suspend fun playSequence(
+        characters: List<String>,
+        onCharacterPlayed: ((String) -> Unit)? = null
+    ) = playSequence(characters, false, onCharacterPlayed)
+
     /**
      * Plays a complete string of Morse characters, words, and bracketed prosigns (e.g. "CQ DE <SK>").
      * Spaces in the input string trigger the standard 7-unit silence delay.
-     * Bracketed prosigns are concatenated into a single continuous sequence bypassing the 3-unit pause.
+     * Prosigns transition between standard 3-unit spacing and 0-unit continuous sound according to [useContinuousProsign].
      */
     open suspend fun playString(
         input: String,
+        useContinuousProsign: Boolean = false,
         onCharacterPlayed: ((String) -> Unit)? = null
     ) {
         val tokens = tokenizeInputString(input)
-        playSequence(tokens, onCharacterPlayed)
+        playSequence(tokens, useContinuousProsign, onCharacterPlayed)
     }
+
+    open suspend fun playString(
+        input: String,
+        onCharacterPlayed: ((String) -> Unit)? = null
+    ) = playString(input, false, onCharacterPlayed)
 
     private suspend fun writePcmBuffer(buffer: ShortArray) = withContext(defaultDispatcher) {
         if (isStopping.get() || !isActive) return@withContext

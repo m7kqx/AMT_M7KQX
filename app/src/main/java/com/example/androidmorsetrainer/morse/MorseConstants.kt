@@ -56,6 +56,13 @@ object MorseConstants {
         "/" to "-..-.",
         "?" to "..--..",
 
+        // Unbracketed prosigns for resilience
+        "BT" to "-...-",
+        "SK" to "...-.-",
+        "AR" to ".-.-.",
+        "KN" to "-.--.",
+        "AS" to ".-...",
+
         // Bracketed aliases for resilience
         "<DE>" to "-.. .",
         "<PSE>" to ".--. ... .",
@@ -87,6 +94,15 @@ object MorseConstants {
         "V", "G", "5", "/", "Q", "9", "Z", "H", "3", "8",
         "B", "?", "4", "2", "7", "C", "1", "D", "6", "X"
     )
+
+    /**
+     * Total number of Koch progression levels (levels 1 through 39).
+     * Level 1 starts with 2 characters ('K', 'M'), and each subsequent level introduces 1 character
+     * until Level 39 completes the full sequence of 40 characters.
+     */
+    const val MIN_KOCH_LEVEL: Int = 1
+    const val MAX_KOCH_LEVEL: Int = 39
+    const val TOTAL_KOCH_LEVELS: Int = 39
 
     /**
      * Standard UK/IARU Region 1 Prosigns and common abbreviations sequence.

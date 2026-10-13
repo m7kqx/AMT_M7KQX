@@ -23,18 +23,27 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Slider
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import kotlin.math.roundToInt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -70,15 +79,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.app.Activity
 import android.view.WindowManager
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
+import com.example.androidmorsetrainer.MorseTrainerApplication
+import com.example.androidmorsetrainer.audio.MorseDSPManager
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
 import com.example.androidmorsetrainer.morse.MorseConstants
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -91,10 +104,54 @@ import androidx.compose.ui.text.input.ImeAction
 fun TrainScreen(
     activeProfile: UserProfile?,
     modifier: Modifier = Modifier,
-    viewModel: TrainViewModel = viewModel(factory = TrainViewModel.Factory)
+    viewModel: TrainViewModel = viewModel(factory = TrainViewModel.Factory),
+    dspManager: MorseDSPManager? = null,
+    trainingMode: String = "Receive",
+    mode: String = trainingMode
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val actualDspManager = dspManager ?: (context.applicationContext as? MorseTrainerApplication)?.container?.morseDSPManager
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    val effectiveMode = if (mode != "Receive") mode else trainingMode
+    val isSendMode = effectiveMode.equals("Send", ignoreCase = true)
+
+    DisposableEffect(lifecycleOwner, effectiveMode) {
+        if (isSendMode) {
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME, Lifecycle.Event.ON_START -> {
+                        if (actualDspManager?.hasRecordPermission() == true) {
+                            actualDspManager.startListening()
+                        }
+                    }
+                    Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                        actualDspManager?.stopListening()
+                    }
+                    else -> {}
+                }
+            }
+
+            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                if (actualDspManager?.hasRecordPermission() == true) {
+                    actualDspManager.startListening()
+                }
+            }
+
+            lifecycleOwner.lifecycle.addObserver(observer)
+
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+                actualDspManager?.stopListening()
+            }
+        } else {
+            actualDspManager?.stopListening()
+            onDispose {
+                actualDspManager?.stopListening()
+            }
+        }
+    }
 
     DisposableEffect(uiState.isSessionActive) {
         val activity = context as? Activity
@@ -116,23 +173,68 @@ fun TrainScreen(
         NoProfileScreen(modifier = modifier)
     } else {
         when (uiState.drillState) {
-            DrillState.DrillSetup -> {
-                TrainPreDrillSetupContent(
+            DrillState.ModeSelection -> {
+                TrainModeSelection(
                     uiState = uiState,
                     profileName = activeProfile.name,
-                    onSelectTrainingMode = viewModel::setTrainingMode,
-                    onSelectDrillLength = viewModel::setDrillLength,
-                    onSelectWpm = viewModel::setWpm,
-                    onToggleHideBottomBar = viewModel::setHideBottomBarPreference,
-                    onStartDrill = { viewModel.startLesson(uiState.selectedDrillLength) },
+                    onSelectMode = { selectedMode ->
+                        actualDspManager?.stopListening()
+                        viewModel.selectTrainingMode(selectedMode)
+                    },
                     modifier = modifier
                 )
+            }
+            DrillState.DrillSetup -> {
+                if (uiState.selectedTrainingMode == SelectedTrainingMode.None) {
+                    TrainModeSelection(
+                        uiState = uiState,
+                        profileName = activeProfile.name,
+                        onSelectMode = { selectedMode ->
+                            actualDspManager?.stopListening()
+                            viewModel.selectTrainingMode(selectedMode)
+                        },
+                        modifier = modifier
+                    )
+                } else {
+                    TrainSetupScreen(
+                        uiState = uiState,
+                        profileName = activeProfile.name,
+                        onNavigateBack = {
+                            actualDspManager?.stopListening()
+                            viewModel.returnToModeSelection()
+                        },
+                        onSelectTrainingMode = { mode ->
+                            actualDspManager?.stopListening()
+                            viewModel.setTrainingMode(mode)
+                        },
+                        onSelectDrillLength = viewModel::setDrillLength,
+                        onSelectWpm = viewModel::setWpm,
+                        onToggleHideBottomBar = viewModel::setHideBottomBarPreference,
+                        onStartDrill = {
+                            actualDspManager?.stopListening()
+                            viewModel.startLesson(uiState.selectedDrillLength)
+                        },
+                        onToggleFocusCharacter = viewModel::toggleFocusCharacter,
+                        onSelectSelectedTrainingMode = { selectedMode ->
+                            actualDspManager?.stopListening()
+                            viewModel.selectTrainingMode(selectedMode)
+                        },
+                        modifier = modifier
+                    )
+                }
             }
             DrillState.Finished -> {
                 TrainDrillSummaryContent(
                     uiState = uiState,
-                    onStartNewDrill = { viewModel.startLesson(uiState.selectedDrillLength) },
+                    onStartNewDrill = {
+                        actualDspManager?.stopListening()
+                        viewModel.startLesson(uiState.selectedDrillLength)
+                    },
                     onReturnToSetup = viewModel::returnToSetup,
+                    onReturnToModeSelection = {
+                        actualDspManager?.stopListening()
+                        viewModel.returnToModeSelection()
+                    },
                     onDismissLevelUpMessage = viewModel::dismissLevelUpMessage,
                     modifier = modifier
                 )
@@ -146,7 +248,10 @@ fun TrainScreen(
                     onSubmitProsignTextInput = viewModel::submitProsignTextInput,
                     onQuitDrill = viewModel::quitDrill,
                     onDismissLevelUpMessage = viewModel::dismissLevelUpMessage,
-                    onStartLesson = viewModel::startLesson,
+                    onStartLesson = {
+                        actualDspManager?.stopListening()
+                        viewModel.startLesson()
+                    },
                     onSetWpm = viewModel::setWpm,
                     modifier = modifier
                 )
@@ -156,22 +261,451 @@ fun TrainScreen(
 }
 
 /**
+ * Data class representing a training curriculum item for the mode selection screen.
+ */
+data class TrainingModeCardItem(
+    val mode: SelectedTrainingMode,
+    val title: String,
+    val subtitle: String,
+    val description: String,
+    val levelBadge: String,
+    val poolBadge: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val featureTag: String
+)
+
+/**
+ * Scalable, card-based Mode Selection Screen for Receive Mode.
+ * Displays available curriculums (Koch Method and Prosigns & Abbreviations) in a LazyColumn,
+ * facilitating future additions of specialized training tracks.
+ */
+@Composable
+fun TrainModeSelection(
+    uiState: TrainUiState,
+    profileName: String,
+    onSelectMode: (SelectedTrainingMode) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val modeItems = remember(uiState.activeKochLevel, uiState.activeProsignLevel, uiState.focusSelectedCharacters) {
+        listOf(
+            TrainingModeCardItem(
+                mode = SelectedTrainingMode.Koch,
+                title = "Koch Method",
+                subtitle = "Sequential Character Reflex Training",
+                description = "Master Morse characters sequentially at full target speed (10–25 WPM). Builds acoustic reflex recognition without counting dots and dashes. Dynamic priority weighting increases challenge frequency for newer or struggling characters.",
+                levelBadge = "Level ${uiState.activeKochLevel} of ${MorseConstants.MAX_KOCH_LEVEL}",
+                poolBadge = "${(uiState.activeKochLevel + 1).coerceAtMost(MorseConstants.KOCH_SEQUENCE.size)} Characters",
+                icon = Icons.Default.School,
+                featureTag = "Single-Character Keypad"
+            ),
+            TrainingModeCardItem(
+                mode = SelectedTrainingMode.Prosign,
+                title = "Prosigns & Abbreviations",
+                subtitle = "Procedural Signals & Operating Codes",
+                description = "Master run-together procedural signals (<AR>, <SK>, <BT>, <AS>, <SOS>) and common CW radio abbreviations. Features multi-character input and automated transition to continuous acoustic spacing upon proficiency.",
+                levelBadge = "Level ${uiState.activeProsignLevel} of 12",
+                poolBadge = "${uiState.activeProsignLevel.coerceAtMost(MorseConstants.PROSIGNS_SEQUENCE.size)} Prosigns",
+                icon = Icons.Default.Radio,
+                featureTag = "Multi-Character Input"
+            ),
+            TrainingModeCardItem(
+                mode = SelectedTrainingMode.FOCUS,
+                title = "Focus Mode",
+                subtitle = "Targeted Character Practice",
+                description = "Custom selection of 3 to 8 characters for concentrated drill sessions at standard Paris timing (10–25 WPM). Ideal for troubleshooting difficult characters, building reflex speed on specific letter clusters, or warming up.",
+                levelBadge = "Custom (${uiState.focusSelectedCharacters.size}/8)",
+                poolBadge = "${uiState.focusSelectedCharacters.size} Characters",
+                icon = Icons.Default.Tune,
+                featureTag = "Custom 3–8 Selection"
+            )
+        )
+    }
+
+    LazyColumn(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp)
+                ) {
+                    Text(
+                        text = "RECEIVE TRAINING",
+                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.5.sp),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Select Training Mode",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    if (profileName.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Trainee: $profileName",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Choose a curriculum below to configure your practice drill. Progress and accuracy stats are tracked separately for each training track.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                    )
+                }
+            }
+        }
+
+        items(modeItems) { item ->
+            TrainModeCard(
+                item = item,
+                onClick = { onSelectMode(item.mode) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrainModeCard(
+    item: TrainingModeCardItem,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(18.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = item.icon,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = item.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = item.subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        text = item.levelBadge,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = item.description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Text(
+                        text = item.poolBadge,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Text(
+                        text = item.featureTag,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+private val FOCUS_KEYBOARD_ROW_1 = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0")
+private val FOCUS_KEYBOARD_ROW_2 = listOf("Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P")
+private val FOCUS_KEYBOARD_ROW_3 = listOf("A", "S", "D", "F", "G", "H", "J", "K", "L")
+private val FOCUS_KEYBOARD_ROW_4 = listOf("Z", "X", "C", "V", "B", "N", "M")
+
+/**
+ * 5-row proportional virtual keyboard for Focus Mode character selection.
+ * Reuses the layout, proportions, and styling of the Koch keyboard,
+ * configuring each key as a multi-select toggle with highlight styling.
+ */
+@Composable
+fun FocusSelectionKeyboard(
+    selectedCharacters: Set<Char>,
+    onKeyPress: (Char) -> Unit,
+    modifier: Modifier = Modifier,
+    keyHeight: androidx.compose.ui.unit.Dp = 44.dp
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        tonalElevation = 1.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // Row 1: 1 through 0 (10 keys, weight 1.0f each)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                FOCUS_KEYBOARD_ROW_1.forEach { charStr ->
+                    FocusKey(
+                        label = charStr,
+                        isSelected = charStr.first() in selectedCharacters,
+                        onClick = { onKeyPress(charStr.first()) },
+                        height = keyHeight
+                    )
+                }
+            }
+
+            // Row 2: Q through P (10 keys, weight 1.0f each)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                FOCUS_KEYBOARD_ROW_2.forEach { charStr ->
+                    FocusKey(
+                        label = charStr,
+                        isSelected = charStr.first() in selectedCharacters,
+                        onClick = { onKeyPress(charStr.first()) },
+                        height = keyHeight
+                    )
+                }
+            }
+
+            // Row 3: A through L (0.5x spacers on both ends, 9 keys weight 1.0f each)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Spacer(modifier = Modifier.weight(0.5f))
+                FOCUS_KEYBOARD_ROW_3.forEach { charStr ->
+                    FocusKey(
+                        label = charStr,
+                        isSelected = charStr.first() in selectedCharacters,
+                        onClick = { onKeyPress(charStr.first()) },
+                        height = keyHeight
+                    )
+                }
+                Spacer(modifier = Modifier.weight(0.5f))
+            }
+
+            // Row 4: Z through M (1.5x spacers on both ends, 7 keys weight 1.0f each)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Spacer(modifier = Modifier.weight(1.5f))
+                FOCUS_KEYBOARD_ROW_4.forEach { charStr ->
+                    FocusKey(
+                        label = charStr,
+                        isSelected = charStr.first() in selectedCharacters,
+                        onClick = { onKeyPress(charStr.first()) },
+                        height = keyHeight
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1.5f))
+            }
+
+            // Row 5: Action row: '?', ',', 2.8x middle spacer, '.', '/' (1.8x width each for ?, ,, ., /)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                FocusKey(
+                    label = "?",
+                    isSelected = '?' in selectedCharacters,
+                    onClick = { onKeyPress('?') },
+                    weight = 1.8f,
+                    height = keyHeight
+                )
+                FocusKey(
+                    label = ",",
+                    isSelected = ',' in selectedCharacters,
+                    onClick = { onKeyPress(',') },
+                    weight = 1.8f,
+                    height = keyHeight
+                )
+                Spacer(modifier = Modifier.weight(2.8f))
+                FocusKey(
+                    label = ".",
+                    isSelected = '.' in selectedCharacters,
+                    onClick = { onKeyPress('.') },
+                    weight = 1.8f,
+                    height = keyHeight
+                )
+                FocusKey(
+                    label = "/",
+                    isSelected = '/' in selectedCharacters,
+                    onClick = { onKeyPress('/') },
+                    weight = 1.8f,
+                    height = keyHeight
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.FocusKey(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    weight: Float = 1.0f,
+    height: androidx.compose.ui.unit.Dp = 44.dp
+) {
+    val containerColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    val contentColor = if (isSelected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    val borderColor = if (isSelected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+    }
+
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .weight(weight)
+            .height(height)
+            .semantics { contentDescription = "Focus Key $label" },
+        shape = RoundedCornerShape(8.dp),
+        color = containerColor,
+        contentColor = contentColor,
+        tonalElevation = if (isSelected) 4.dp else 1.dp,
+        shadowElevation = if (isSelected) 2.dp else 0.dp,
+        border = BorderStroke(if (isSelected) 2.dp else 1.dp, borderColor)
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = contentColor,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+    }
+}
+
+/**
  * Dedicated Material 3 Pre-Drill Setup Screen for Receive Mode.
- * Allows the user to select drill length (20, 50, 100 challenges) and review active characters.
+ * Dynamically filters its displayed configuration options and training objectives
+ * based on the selected training mode (Koch vs. Prosigns vs. Focus).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TrainPreDrillSetupContent(
+fun TrainSetupScreen(
     uiState: TrainUiState,
     profileName: String,
+    onNavigateBack: () -> Unit,
     onSelectTrainingMode: (TrainingMode) -> Unit,
     onSelectDrillLength: (Int) -> Unit,
     onSelectWpm: (Int) -> Unit,
     onToggleHideBottomBar: (Boolean) -> Unit,
     onStartDrill: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onToggleFocusCharacter: (Char) -> Unit = {},
+    onSelectSelectedTrainingMode: (SelectedTrainingMode) -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
+    val isFocusMode = uiState.selectedTrainingMode == SelectedTrainingMode.FOCUS || uiState.isFocusMode
+    val isProsignMode = !isFocusMode && (uiState.trainingMode == TrainingMode.Prosigns || uiState.selectedTrainingMode == SelectedTrainingMode.Prosign)
 
     Column(
         modifier = modifier
@@ -180,7 +714,7 @@ private fun TrainPreDrillSetupContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Header Card: Mode & Trainee Profile
+        // 1. Header Card: Mode & Trainee Profile with Back Button
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
@@ -193,21 +727,35 @@ private fun TrainPreDrillSetupContent(
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    IconButton(
+                        onClick = onNavigateBack,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Return to mode selection",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "RECEIVE DRILL SETUP",
+                            text = when {
+                                isFocusMode -> "FOCUS DRILL SETUP"
+                                isProsignMode -> "PROSIGN DRILL SETUP"
+                                else -> "KOCH DRILL SETUP"
+                            },
                             style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.5.sp),
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                         Text(
-                            text = if (uiState.trainingMode == TrainingMode.Prosigns) {
-                                "Prosigns Level ${uiState.activeProsignLevel} of 12"
-                            } else {
-                                "Koch Level ${uiState.activeKochLevel} of 40"
+                            text = when {
+                                isFocusMode -> "Custom Focus (${uiState.focusSelectedCharacters.size}/8)"
+                                isProsignMode -> "Prosigns Level ${uiState.activeProsignLevel} of 12"
+                                else -> "Koch Level ${uiState.activeKochLevel} of ${MorseConstants.MAX_KOCH_LEVEL}"
                             },
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
@@ -228,7 +776,11 @@ private fun TrainPreDrillSetupContent(
                         contentColor = MaterialTheme.colorScheme.primary
                     ) {
                         Text(
-                            text = "${uiState.availableCharacters.size} Chars",
+                            text = when {
+                                isFocusMode -> "${uiState.focusSelectedCharacters.size} Chars"
+                                isProsignMode -> "${uiState.availableCharacters.size} Prosigns"
+                                else -> "${uiState.availableCharacters.size} Chars"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
@@ -236,30 +788,61 @@ private fun TrainPreDrillSetupContent(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = when {
+                        isFocusMode -> "Focus mode allows custom selection of 3 to 8 characters for concentrated practice at standard Paris timing (10–25 WPM) with visual dotrep hints."
+                        isProsignMode -> "Prosigns training focuses on procedural signals (<AR>, <SK>, <BT>, <AS>, <SOS>) and common radio abbreviations with multi-character entry and continuous tone spacing upon proficiency."
+                        else -> "Koch method sequentially introduces individual Morse characters at full target speed (10–25 WPM) with dynamic priority weighting to build acoustic reflex recognition."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Mode switching chips
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     FilterChip(
-                        selected = uiState.trainingMode == TrainingMode.Koch,
-                        onClick = { onSelectTrainingMode(TrainingMode.Koch) },
+                        selected = !isProsignMode && !isFocusMode,
+                        onClick = {
+                            onSelectSelectedTrainingMode(SelectedTrainingMode.Koch)
+                            onSelectTrainingMode(TrainingMode.Koch)
+                        },
                         label = { Text("Koch Method") },
                         modifier = Modifier.weight(1f)
                     )
                     FilterChip(
-                        selected = uiState.trainingMode == TrainingMode.Prosigns,
-                        onClick = { onSelectTrainingMode(TrainingMode.Prosigns) },
-                        label = { Text("Prosigns & Abbreviations") },
+                        selected = isProsignMode,
+                        onClick = {
+                            onSelectSelectedTrainingMode(SelectedTrainingMode.Prosign)
+                            onSelectTrainingMode(TrainingMode.Prosigns)
+                        },
+                        label = { Text("Prosigns") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = isFocusMode,
+                        onClick = {
+                            onSelectSelectedTrainingMode(SelectedTrainingMode.FOCUS)
+                        },
+                        label = { Text("Focus Mode") },
                         modifier = Modifier.weight(1f)
                     )
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Active sequence chips
+                // Active sequence chips - dynamically labeled based on active mode
                 Text(
-                    text = "Active Characters Pool:",
+                    text = when {
+                        isFocusMode -> "Selected Characters (${uiState.focusSelectedCharacters.size}/8):"
+                        isProsignMode -> "Active Prosigns Pool:"
+                        else -> "Active Characters Pool:"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                 )
@@ -268,8 +851,16 @@ private fun TrainPreDrillSetupContent(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    uiState.availableCharacters.forEach { char ->
-                        val isMastered = char.uppercase() in uiState.masteredCharacters
+                    val displayedPool = if (isFocusMode) {
+                        uiState.focusSelectedCharacters.sorted().map { it.toString() }
+                    } else {
+                        uiState.availableCharacters
+                    }
+                    displayedPool.forEach { char ->
+                        val cleanChar = char.uppercase().replace("<", "").replace(">", "")
+                        val isMastered = char.uppercase() in uiState.masteredCharacters ||
+                            cleanChar in uiState.masteredCharacters ||
+                            "<$cleanChar>" in uiState.masteredCharacters
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = if (isMastered) Color(0xFF10B981).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface,
@@ -291,137 +882,426 @@ private fun TrainPreDrillSetupContent(
             }
         }
 
-        // 2. Drill Length Selection Card (20, 50, 100)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp)
+        if (isFocusMode) {
+            // 2. Playback Speed (WPM) Slider Card for Focus Mode
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
             ) {
-                Text(
-                    text = "SELECT DRILL LENGTH",
-                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "Select number of challenges in this practice session",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp)
                 ) {
-                    val drillOptions = listOf(20 to "Quick", 50 to "Standard", 100 to "Endurance")
-                    drillOptions.forEach { (count, label) ->
-                        val isSelected = uiState.selectedDrillLength == count
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { onSelectDrillLength(count) },
-                            modifier = Modifier.weight(1f),
-                            label = {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = "$count",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = label,
-                                        style = MaterialTheme.typography.labelSmall
-                                    )
-                                }
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            shape = RoundedCornerShape(12.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "PLAYBACK SPEED (WPM)",
+                                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Standard Paris timing speed (10 to 25 WPM)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                text = "${uiState.currentWpm} WPM",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Slider(
+                        value = uiState.currentWpm.toFloat().coerceIn(10f, 25f),
+                        onValueChange = { onSelectWpm(it.roundToInt().coerceIn(10, 25)) },
+                        valueRange = 10f..25f,
+                        steps = 14,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "10 WPM",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "25 WPM",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
-        }
 
-        // 3. Playback Speed (WPM) Configuration Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // 3. Challenge Count Slider Card for Focus Mode
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "CHALLENGE COUNT",
+                                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Select number of challenges in this practice session",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                text = "${uiState.selectedDrillLength}",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Slider(
+                        value = uiState.selectedDrillLength.toFloat().coerceIn(10f, 100f),
+                        onValueChange = { onSelectDrillLength(((it / 5).roundToInt() * 5).coerceIn(10, 100)) },
+                        valueRange = 10f..100f,
+                        steps = 17,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "10 Challenges",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "100 Challenges",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // 4. 5-Row Proportional Keyboard Selection Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "FOCUS CHARACTERS",
+                                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Select 3 to 8 characters via the virtual keyboard",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (uiState.focusSelectedCharacters.size in 3..8) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.errorContainer
+                            }
+                        ) {
+                            Text(
+                                text = "${uiState.focusSelectedCharacters.size} / 8",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (uiState.focusSelectedCharacters.size in 3..8) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    if (uiState.focusSelectedCharacters.size < 3) {
+                        Text(
+                            text = "⚠️ Select at least 3 characters to enable starting the drill.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    } else if (uiState.focusSelectedCharacters.size == 8) {
+                        Text(
+                            text = "Maximum of 8 characters selected.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
+
+                    FocusSelectionKeyboard(
+                        selectedCharacters = uiState.focusSelectedCharacters,
+                        onKeyPress = onToggleFocusCharacter
+                    )
+                }
+            }
+
+            // 5. Focus Objectives Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Text(
-                        text = "PLAYBACK SPEED (WPM)",
+                        text = "Focus Training Objectives",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "• Practice targeted subset of 3 to 8 characters (${uiState.focusSelectedCharacters.sorted().joinToString(", ")}).",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "• Audio tones play at standard Paris timing (${uiState.currentWpm} WPM).",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "• Key in each character using the proportional 5-row virtual keyboard.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "• Dynamic visual Morse dot aids display until 6 successful identifications are achieved.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            // 2. Drill Length Selection Card (20, 50, 100)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp)
+                ) {
+                    Text(
+                        text = "SELECT DRILL LENGTH",
                         style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "Scales Paris timing speed (10 to 25 WPM)",
+                        text = "Select number of challenges in this practice session",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                WpmDropdownSelector(
-                    currentWpm = uiState.currentWpm,
-                    onWpmChange = onSelectWpm,
-                    modifier = Modifier.width(135.dp)
-                )
-            }
-        }
 
-        // 4. Drill Objectives & Information Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        val drillOptions = listOf(20 to "Quick", 50 to "Standard", 100 to "Endurance")
+                        drillOptions.forEach { (count, label) ->
+                            val isSelected = uiState.selectedDrillLength == count
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onSelectDrillLength(count) },
+                                modifier = Modifier.weight(1f),
+                                label = {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = "$count",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
+                                    }
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 3. Playback Speed (WPM) Configuration Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
             ) {
-                Text(
-                    text = "Training Objectives",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "• Listen to synthesized Morse audio tones at standard Paris timing.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "• Legacy v1.7 dynamic priority will increase frequency of newly unlocked or struggling characters.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "• Achieve ≥ 70% accuracy across ≥ 5 attempts on the latest character to advance to the next Koch level.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "PLAYBACK SPEED (WPM)",
+                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Scales Paris timing speed (10 to 25 WPM)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    WpmDropdownSelector(
+                        currentWpm = uiState.currentWpm,
+                        onWpmChange = onSelectWpm,
+                        modifier = Modifier.width(135.dp)
+                    )
+                }
+            }
+
+            // 4. Drill Objectives & Information Card (dynamically filtered by mode)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = if (isProsignMode) "Prosigns Training Objectives" else "Koch Training Objectives",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (isProsignMode) {
+                        Text(
+                            text = "• Listen to synthesized Morse audio tones with continuous prosign keying once proficient.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "• Enter full procedural signals (<AR>, <SK>, <BT>, <AS>, <SOS>) using text input or keyboard.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "• Dynamic priority increases presentation frequency of newly unlocked or struggling prosigns.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "• Achieve ≥ 70% accuracy across ≥ 5 attempts on the latest prosign to advance to the next level.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            text = "• Listen to synthesized Morse audio tones at standard Paris timing (10–25 WPM).",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "• Legacy v1.7 dynamic priority will increase frequency of newly unlocked or struggling characters.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "• Key in each character using the proportional 5-row virtual keyboard.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "• Achieve ≥ 70% accuracy across ≥ 5 attempts on the latest character to advance to the next Koch level.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
         }
 
@@ -454,6 +1334,7 @@ private fun TrainPreDrillSetupContent(
         // 6. Prominent "Start Drill" Action Button
         Button(
             onClick = onStartDrill,
+            enabled = if (isFocusMode) uiState.focusSelectedCharacters.size in 3..8 else true,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(60.dp),
@@ -466,19 +1347,55 @@ private fun TrainPreDrillSetupContent(
                 horizontalArrangement = Arrangement.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.School,
+                    imageVector = when {
+                        isFocusMode -> Icons.Default.Tune
+                        isProsignMode -> Icons.Default.Radio
+                        else -> Icons.Default.School
+                    },
                     contentDescription = null,
                     modifier = Modifier.size(24.dp)
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "Start Receive Drill (${uiState.selectedDrillLength} Challenges)",
+                    text = when {
+                        isFocusMode -> "Start Focus Drill (${uiState.selectedDrillLength} Challenges)"
+                        isProsignMode -> "Start Prosign Drill (${uiState.selectedDrillLength} Challenges)"
+                        else -> "Start Receive Drill (${uiState.selectedDrillLength} Challenges)"
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
             }
         }
     }
+}
+
+/**
+ * Backward-compatible wrapper delegating to [TrainSetupScreen].
+ */
+@Composable
+private fun TrainPreDrillSetupContent(
+    uiState: TrainUiState,
+    profileName: String,
+    onSelectTrainingMode: (TrainingMode) -> Unit,
+    onSelectDrillLength: (Int) -> Unit,
+    onSelectWpm: (Int) -> Unit,
+    onToggleHideBottomBar: (Boolean) -> Unit,
+    onStartDrill: () -> Unit,
+    modifier: Modifier = Modifier,
+    onNavigateBack: () -> Unit = {}
+) {
+    TrainSetupScreen(
+        uiState = uiState,
+        profileName = profileName,
+        onNavigateBack = onNavigateBack,
+        onSelectTrainingMode = onSelectTrainingMode,
+        onSelectDrillLength = onSelectDrillLength,
+        onSelectWpm = onSelectWpm,
+        onToggleHideBottomBar = onToggleHideBottomBar,
+        onStartDrill = onStartDrill,
+        modifier = modifier
+    )
 }
 
 /**
@@ -490,7 +1407,8 @@ private fun TrainDrillSummaryContent(
     onStartNewDrill: () -> Unit,
     onReturnToSetup: () -> Unit,
     onDismissLevelUpMessage: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onReturnToModeSelection: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
 
@@ -666,6 +1584,17 @@ private fun TrainDrillSummaryContent(
                 fontWeight = FontWeight.SemiBold
             )
         }
+
+        TextButton(
+            onClick = onReturnToModeSelection,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "Choose Another Mode",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
     }
 }
 
@@ -805,6 +1734,8 @@ fun TrainScreenContent(
                     Text(
                         text = if (uiState.trainingMode == TrainingMode.Prosigns) {
                             "Active characters for Prosigns Level ${uiState.activeProsignLevel}"
+                        } else if (uiState.isFocusMode) {
+                            "Focus practice with ${uiState.focusSelectedCharacters.size} characters"
                         } else {
                             "Active characters for Koch Level ${uiState.activeKochLevel}"
                         },
@@ -1012,7 +1943,7 @@ private fun KochLevelHeader(
             ) {
                 Column {
                     Text(
-                        text = "Koch Level $activeLevel of 40",
+                        text = "Koch Level $activeLevel of ${MorseConstants.MAX_KOCH_LEVEL}",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -1042,9 +1973,9 @@ private fun KochLevelHeader(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Level progression bar (Level 1..40)
+            // Level progression bar (Level 1..39)
             LinearProgressIndicator(
-                progress = { activeLevel / 40f },
+                progress = { activeLevel / MorseConstants.MAX_KOCH_LEVEL.toFloat() },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp),

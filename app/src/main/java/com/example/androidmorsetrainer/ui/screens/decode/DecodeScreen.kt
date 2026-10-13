@@ -57,8 +57,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.androidmorsetrainer.audio.MorseDSPManager
 import com.example.androidmorsetrainer.ui.theme.SdrGraticule
 import com.example.androidmorsetrainer.ui.theme.SdrGraticuleAccent
 import com.example.androidmorsetrainer.ui.theme.SdrPhosphorActive
@@ -72,10 +76,41 @@ import kotlin.math.max
 @Composable
 fun DecodeScreen(
     modifier: Modifier = Modifier,
-    viewModel: DecodeViewModel = viewModel(factory = DecodeViewModel.Factory)
+    viewModel: DecodeViewModel = viewModel(factory = DecodeViewModel.Factory),
+    dspManager: MorseDSPManager = viewModel.dspManager
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME, Lifecycle.Event.ON_START -> {
+                    if (dspManager.hasRecordPermission()) {
+                        dspManager.startListening()
+                    }
+                }
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    dspManager.stopListening()
+                }
+                else -> {}
+            }
+        }
+
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            if (dspManager.hasRecordPermission()) {
+                dspManager.startListening()
+            }
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            dspManager.stopListening()
+        }
+    }
 
     DisposableEffect(uiState.isListening) {
         val activity = context as? Activity

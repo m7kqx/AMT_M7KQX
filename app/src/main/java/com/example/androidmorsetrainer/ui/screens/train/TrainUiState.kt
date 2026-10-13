@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
 
 enum class DrillState {
+    ModeSelection,
     DrillSetup,
     DrillActive,
     ShowingResult,
@@ -13,6 +14,26 @@ enum class DrillState {
 enum class TrainingMode {
     Koch,
     Prosigns
+}
+
+enum class SelectedTrainingMode {
+    None,
+    Koch,
+    Prosign,
+    FOCUS;
+
+    val trainingMode: TrainingMode?
+        get() = when (this) {
+            Koch -> TrainingMode.Koch
+            Prosign -> TrainingMode.Prosigns
+            FOCUS -> TrainingMode.Koch
+            None -> null
+        }
+
+    companion object {
+        val Prosigns: SelectedTrainingMode get() = Prosign
+        val Focus: SelectedTrainingMode get() = FOCUS
+    }
 }
 
 /**
@@ -25,10 +46,11 @@ data class TrainUiState(
     val activeKochLevel: Int = 1,
     val activeProsignLevel: Int = 1,
     val trainingMode: TrainingMode = TrainingMode.Koch,
+    val selectedTrainingMode: SelectedTrainingMode = SelectedTrainingMode.None,
     val currentWpm: Int = 20,
     val availableCharacters: List<String> = emptyList(),
     val targetCharacter: String = "",
-    val drillState: DrillState = DrillState.DrillSetup,
+    val drillState: DrillState = DrillState.ModeSelection,
     val isPlayingAudio: Boolean = false,
     val isReplayTone: Boolean = false,
     val selectedDrillLength: Int = 20,
@@ -63,8 +85,12 @@ data class TrainUiState(
     val characterSuccessCounts: Map<String, Int> = emptyMap(),
     val characterAccuracies: Map<String, Float> = emptyMap(),
     val prosignTextInput: String = "",
-    val hideBottomBarPreference: Boolean = false
+    val hideBottomBarPreference: Boolean = false,
+    val focusSelectedCharacters: Set<Char> = setOf('K', 'M', 'R')
 ) {
+    val isFocusMode: Boolean
+        get() = selectedTrainingMode == SelectedTrainingMode.FOCUS
+
     val currentLevel: Int
         get() = if (trainingMode == TrainingMode.Prosigns) activeProsignLevel else activeKochLevel
 

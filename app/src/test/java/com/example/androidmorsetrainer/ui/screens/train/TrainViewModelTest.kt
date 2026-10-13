@@ -92,9 +92,21 @@ class FakeProfileRepository : ProfileRepository {
 
 class FakeMorseAudioGenerator : MorseAudioGenerator() {
     val playedCharacters = mutableListOf<String>()
+    val playedContinuousProsigns = mutableListOf<Boolean>()
+
+    override suspend fun playCharacter(character: String, speedWpm: Int?, useContinuousProsign: Boolean) {
+        playedCharacters.add(character)
+        playedContinuousProsigns.add(useContinuousProsign)
+    }
+
+    override suspend fun playCharacter(character: String, useContinuousProsign: Boolean) {
+        playedCharacters.add(character)
+        playedContinuousProsigns.add(useContinuousProsign)
+    }
 
     override suspend fun playCharacter(character: String) {
         playedCharacters.add(character)
+        playedContinuousProsigns.add(false)
     }
 
     override fun stop() {}
@@ -1033,5 +1045,296 @@ class TrainViewModelTest {
         testScheduler.advanceTimeBy(1600)
         advanceUntilIdle()
         assertEquals(2, viewModel.uiState.value.currentChallengeIndex)
+    }
+
+    @Test
+    fun prosignMode_initialDotrepHintVisibleOnFirstAttempt() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        viewModel.setTrainingMode(TrainingMode.Prosigns)
+        advanceUntilIdle()
+
+        // Setup state should have <AR> visual aid active
+        val setupState = viewModel.uiState.value
+        assertEquals("<AR>", setupState.newlyIntroducedCharacter)
+        assertEquals(".-.-.", setupState.newCharacterDotRepresentation)
+        assertEquals("<AR> .-.-.", setupState.newCharacterVisualAid)
+        assertTrue("Setup state should have visual aid active for new prosign", setupState.isVisualAidActive)
+
+        viewModel.startLesson(20)
+        advanceUntilIdle()
+
+        val activeState = viewModel.uiState.value
+        assertEquals("<AR>", activeState.targetCharacter)
+        assertTrue("Prosign hint must be visible on the first challenge", activeState.isVisualAidActive)
+        assertEquals("<AR>", activeState.activeHintCharacter)
+        assertEquals(".-.-.", activeState.activeHintDotRep)
+        assertEquals("<AR> .-.-.", activeState.visualAidText)
+    }
+
+    @Test
+    fun prosignMode_dotrepHintDynamicallyHidesAfterThreeSuccessfulInputs() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        viewModel.setTrainingMode(TrainingMode.Prosigns)
+        advanceUntilIdle()
+
+        viewModel.startLesson(20)
+        advanceUntilIdle()
+
+        // Attempt 1: 0 successes, hint must be visible
+        assertEquals(0, viewModel.uiState.value.characterSuccessCounts["<AR>"] ?: 0)
+        assertTrue("Hint must be visible at 0 successes", viewModel.uiState.value.isVisualAidActive)
+        assertEquals("<AR> .-.-.", viewModel.uiState.value.visualAidText)
+
+        // Make an incorrect attempt first so accuracy stays < 90% (preventing promotion to level 2)
+        viewModel.submitGuess("X")
+        testScheduler.advanceTimeBy(1600)
+        advanceUntilIdle()
+
+        assertEquals(0, viewModel.uiState.value.characterSuccessCounts["<AR>"] ?: 0)
+        assertTrue("Hint must remain visible after incorrect guess", viewModel.uiState.value.isVisualAidActive)
+
+        // Success 1
+        viewModel.submitGuess("AR")
+        testScheduler.advanceTimeBy(1600)
+        advanceUntilIdle()
+
+        assertEquals(1, viewModel.uiState.value.characterSuccessCounts["<AR>"])
+        assertTrue("Hint must remain visible after 1 success", viewModel.uiState.value.isVisualAidActive)
+        assertEquals("<AR> .-.-.", viewModel.uiState.value.visualAidText)
+
+        // Success 2
+        viewModel.submitGuess("AR")
+        testScheduler.advanceTimeBy(1600)
+        advanceUntilIdle()
+
+        assertEquals(2, viewModel.uiState.value.characterSuccessCounts["<AR>"])
+        assertTrue("Hint must remain visible after 2 successes", viewModel.uiState.value.isVisualAidActive)
+        assertEquals("<AR> .-.-.", viewModel.uiState.value.visualAidText)
+
+        // Success 3 (Threshold of 3 reached)
+        viewModel.submitGuess("AR")
+        testScheduler.advanceTimeBy(1600)
+        advanceUntilIdle()
+
+        assertEquals(3, viewModel.uiState.value.characterSuccessCounts["<AR>"])
+        assertEquals("<AR>", viewModel.uiState.value.targetCharacter)
+        assertFalse("Hint must automatically hide after 3 successful inputs", viewModel.uiState.value.isVisualAidActive)
+        assertNull("Visual aid text must be null after 3 successes", viewModel.uiState.value.visualAidText)
+        assertFalse("shouldShowHintForCharacter must return false after 3 successes",
+            viewModel.shouldShowHintForCharacter("<AR>", emptySet(), 1))
+    }
+
+    @Test
+    fun getVisualAidSuccessThreshold_returns3ForProsignsAnd6ForKoch() {
+        assertEquals(3, viewModel.getVisualAidSuccessThreshold(TrainingMode.Prosigns))
+        assertEquals(6, viewModel.getVisualAidSuccessThreshold(TrainingMode.Koch))
+    }
+
+    @Test
+    fun shouldShowHintForCharacter_prosignsVsKochThresholdBehavior() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        // Koch mode: default
+        assertTrue(viewModel.shouldShowHintForCharacter("K", emptySet(), 1))
+        assertTrue(viewModel.shouldShowHintForCharacter("M", emptySet(), 1))
+
+        // Prosigns mode
+        viewModel.setTrainingMode(TrainingMode.Prosigns)
+        advanceUntilIdle()
+
+        // Prosign at level 1 is <AR> (or AR)
+        assertTrue(viewModel.shouldShowHintForCharacter("<AR>", emptySet(), 1))
+        assertTrue(viewModel.shouldShowHintForCharacter("AR", emptySet(), 1))
+        // Prosigns at higher level should not show hint at level 1
+        assertFalse(viewModel.shouldShowHintForCharacter("<BT>", emptySet(), 1))
+
+        // When mastered, never show hint
+        assertFalse(viewModel.shouldShowHintForCharacter("<AR>", setOf("<AR>"), 1))
+        assertFalse(viewModel.shouldShowHintForCharacter("AR", setOf("AR"), 1))
+    }
+
+    @Test
+    fun prosignAudio_transitionsToContinuousSpacingAtProficiencyThresholdOf6Successes() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        viewModel.setTrainingMode(TrainingMode.Prosigns)
+        advanceUntilIdle()
+
+        viewModel.startLesson(20)
+        advanceUntilIdle()
+
+        assertEquals("<AR>", viewModel.uiState.value.targetCharacter)
+        assertEquals(0, viewModel.uiState.value.characterSuccessCounts["<AR>"] ?: 0)
+        assertFalse(
+            "At 0 successes, prosign audio must use standard 3-unit spacing (useContinuous = false)",
+            fakeAudioGenerator.playedContinuousProsigns.last()
+        )
+
+        // Make two incorrect guesses first so accuracy stays < 90%, keeping drill at level 1 (<AR>)
+        viewModel.submitGuess("X")
+        testScheduler.advanceTimeBy(1600)
+        advanceUntilIdle()
+
+        viewModel.submitGuess("X")
+        testScheduler.advanceTimeBy(1600)
+        advanceUntilIdle()
+
+        // Submit 5 successful guesses (successes 1 through 5)
+        for (i in 1..5) {
+            viewModel.submitGuess("AR")
+            testScheduler.advanceTimeBy(1600)
+            advanceUntilIdle()
+            assertEquals(i, viewModel.uiState.value.characterSuccessCounts["<AR>"])
+            assertFalse(
+                "At $i successes (< 6), prosign audio must use standard 3-unit spacing (useContinuous = false)",
+                fakeAudioGenerator.playedContinuousProsigns.last()
+            )
+        }
+
+        // Submit 6th successful guess (reaches proficiency threshold of 6)
+        viewModel.submitGuess("AR")
+        testScheduler.advanceTimeBy(1600)
+        advanceUntilIdle()
+
+        assertEquals(6, viewModel.uiState.value.characterSuccessCounts["<AR>"])
+        assertTrue(
+            "At 6 successes (threshold reached), prosign audio must transition to continuous spacing (useContinuous = true)",
+            fakeAudioGenerator.playedContinuousProsigns.last()
+        )
+
+        // Replay tone also plays with continuous spacing
+        fakeAudioGenerator.playedContinuousProsigns.clear()
+        viewModel.playTone()
+        advanceUntilIdle()
+        assertTrue(
+            "Replaying tone after reaching proficiency threshold must use continuous spacing",
+            fakeAudioGenerator.playedContinuousProsigns.last()
+        )
+    }
+
+    @Test
+    fun levelAdvancementDuringDrill_smoothlyTransitionsWithoutStoppingOrRestartingSession() = runTest(testDispatcher) {
+        fakeRepository.saveCharacterStat(
+            CharacterStats(
+                profileId = testProfile.id,
+                character = "M",
+                correctCount = 4,
+                incorrectCount = 0,
+                priorityWeight = 1.0f
+            )
+        )
+
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        viewModel.startLesson(10)
+        advanceUntilIdle()
+
+        assertTrue("Session must be active", viewModel.uiState.value.isSessionActive)
+        assertEquals(1, viewModel.uiState.value.activeKochLevel)
+        assertEquals(1, viewModel.uiState.value.currentChallengeIndex)
+
+        while (viewModel.uiState.value.activeKochLevel == 1 && viewModel.uiState.value.currentChallengeIndex < 10) {
+            val target = viewModel.uiState.value.targetCharacter
+            viewModel.submitGuess(target)
+            testScheduler.advanceTimeBy(1600)
+            advanceUntilIdle()
+        }
+
+        val state = viewModel.uiState.value
+        assertEquals(2, state.activeKochLevel)
+        assertTrue("Level 2 character pool must contain R", state.availableCharacters.contains("R"))
+        assertNotNull(state.levelUpMessage)
+
+        assertTrue("Session must remain active across level change", state.isSessionActive)
+        assertFalse("Session must not be finished prematurely", state.isSessionFinished)
+        assertTrue("Challenge index must have progressed without resetting", state.currentChallengeIndex > 1)
+
+        val updatedProfile = testProfile.copy(currentKochLevel = 2)
+        viewModel.setActiveProfile(updatedProfile)
+        advanceUntilIdle()
+
+        val preservedState = viewModel.uiState.value
+        assertTrue("Session must remain active after profile update", preservedState.isSessionActive)
+        assertEquals(2, preservedState.activeKochLevel)
+    }
+
+    @Test
+    fun selectTrainingMode_updatesModeAndTransitionsToDrillSetup() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        // Initially in ModeSelection
+        assertEquals(DrillState.ModeSelection, viewModel.uiState.value.drillState)
+        assertEquals(SelectedTrainingMode.None, viewModel.uiState.value.selectedTrainingMode)
+
+        // Select Koch mode
+        viewModel.selectTrainingMode(SelectedTrainingMode.Koch)
+        advanceUntilIdle()
+
+        val kochState = viewModel.uiState.value
+        assertEquals(DrillState.DrillSetup, kochState.drillState)
+        assertEquals(SelectedTrainingMode.Koch, kochState.selectedTrainingMode)
+        assertEquals(TrainingMode.Koch, kochState.trainingMode)
+
+        // Return to Mode Selection
+        viewModel.returnToModeSelection()
+        advanceUntilIdle()
+
+        val returnState = viewModel.uiState.value
+        assertEquals(DrillState.ModeSelection, returnState.drillState)
+        assertEquals(SelectedTrainingMode.None, returnState.selectedTrainingMode)
+
+        // Select Prosigns mode
+        viewModel.selectTrainingMode(SelectedTrainingMode.Prosign)
+        advanceUntilIdle()
+
+        val prosignState = viewModel.uiState.value
+        assertEquals(DrillState.DrillSetup, prosignState.drillState)
+        assertEquals(SelectedTrainingMode.Prosign, prosignState.selectedTrainingMode)
+        assertEquals(TrainingMode.Prosigns, prosignState.trainingMode)
+    }
+
+    @Test
+    fun overrideKochLevel_capsAt39InsteadOf41() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        // Valid level 15
+        viewModel.overrideKochLevel(15)
+        advanceUntilIdle()
+        assertEquals(15, viewModel.uiState.value.activeKochLevel)
+
+        // Attempting to set 41 must be capped strictly at 39
+        viewModel.overrideKochLevel(41)
+        advanceUntilIdle()
+        assertEquals(39, viewModel.uiState.value.activeKochLevel)
+        assertEquals(40, viewModel.uiState.value.availableCharacters.size)
+
+        // Attempting to set 100 must also be capped at 39
+        viewModel.overrideKochLevel(100)
+        advanceUntilIdle()
+        assertEquals(39, viewModel.uiState.value.activeKochLevel)
+
+        // Lower bound clamp (level 0 or negative clamped to 1)
+        viewModel.overrideKochLevel(0)
+        advanceUntilIdle()
+        assertEquals(1, viewModel.uiState.value.activeKochLevel)
+    }
+
+    @Test
+    fun setActiveProfile_withLevelOver39_capsAt39() = runTest(testDispatcher) {
+        val highLevelProfile = testProfile.copy(currentKochLevel = 41)
+        viewModel.setActiveProfile(highLevelProfile)
+        advanceUntilIdle()
+
+        assertEquals(39, viewModel.uiState.value.activeKochLevel)
+        assertEquals(40, viewModel.uiState.value.availableCharacters.size)
     }
 }
