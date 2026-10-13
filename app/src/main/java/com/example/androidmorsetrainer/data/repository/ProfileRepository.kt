@@ -24,6 +24,9 @@ interface ProfileRepository {
     suspend fun getWeightedStatsForProfile(profileId: Long): List<CharacterStats>
     suspend fun getStatForCharacter(profileId: Long, character: String): CharacterStats?
     suspend fun saveCharacterStat(stat: CharacterStats)
+    suspend fun saveTimeAttackReport(report: com.example.androidmorsetrainer.data.local.entity.TimeAttackReport): Long
+    suspend fun getTimeAttackReports(profileId: Long): List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport>
+    fun getTimeAttackReportsFlow(profileId: Long): Flow<List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport>>
 }
 
 class ProfileRepositoryImpl(
@@ -88,5 +91,17 @@ class ProfileRepositoryImpl(
 
     override suspend fun saveCharacterStat(stat: CharacterStats) = withContext(ioDispatcher) {
         characterStatsDao.insertOrUpdate(stat)
+    }
+
+    override suspend fun saveTimeAttackReport(report: com.example.androidmorsetrainer.data.local.entity.TimeAttackReport): Long = withContext(ioDispatcher) {
+        characterStatsDao.insertTimeAttackReport(report)
+    }
+
+    override suspend fun getTimeAttackReports(profileId: Long): List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport> = withContext(ioDispatcher) {
+        characterStatsDao.getTimeAttackReportsForProfile(profileId)
+    }
+
+    override fun getTimeAttackReportsFlow(profileId: Long): Flow<List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport>> {
+        return characterStatsDao.getTimeAttackReportsFlow(profileId)
     }
 }

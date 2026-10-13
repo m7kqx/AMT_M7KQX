@@ -68,6 +68,10 @@ class FakeProfileRepository : ProfileRepository {
     override suspend fun getStatForCharacter(profileId: Long, character: String): CharacterStats? = null
 
     override suspend fun saveCharacterStat(stat: CharacterStats) {}
+
+    override suspend fun saveTimeAttackReport(report: com.example.androidmorsetrainer.data.local.entity.TimeAttackReport): Long = 1L
+    override suspend fun getTimeAttackReports(profileId: Long): List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport> = emptyList()
+    override fun getTimeAttackReportsFlow(profileId: Long): Flow<List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport>> = MutableStateFlow(emptyList())
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)

@@ -6,6 +6,9 @@ import com.example.androidmorsetrainer.data.local.entity.UserProfile
 import com.example.androidmorsetrainer.data.repository.ProfileRepository
 import com.example.androidmorsetrainer.morse.KochMethodManager
 import com.example.androidmorsetrainer.morse.MorseConstants
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackChallengeResult
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackOutcome
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackReport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -85,8 +88,25 @@ class FakeProfileRepository : ProfileRepository {
         return characterStatsMap[Pair(profileId, character)]
     }
 
+    private val timeAttackReportsList = mutableListOf<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport>()
+    private var nextReportId = 1L
+
     override suspend fun saveCharacterStat(stat: CharacterStats) {
         characterStatsMap[Pair(stat.profileId, stat.character)] = stat
+    }
+
+    override suspend fun saveTimeAttackReport(report: com.example.androidmorsetrainer.data.local.entity.TimeAttackReport): Long {
+        val saved = report.copy(id = nextReportId++)
+        timeAttackReportsList.add(0, saved)
+        return saved.id
+    }
+
+    override suspend fun getTimeAttackReports(profileId: Long): List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport> {
+        return timeAttackReportsList.filter { it.profileId == profileId }
+    }
+
+    override fun getTimeAttackReportsFlow(profileId: Long): Flow<List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport>> {
+        return MutableStateFlow(timeAttackReportsList.filter { it.profileId == profileId })
     }
 }
 
@@ -1336,5 +1356,233 @@ class TrainViewModelTest {
 
         assertEquals(39, viewModel.uiState.value.activeKochLevel)
         assertEquals(40, viewModel.uiState.value.availableCharacters.size)
+    }
+
+    @Test
+    fun timeAttack_configurationClampingAndStateUpdates() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        viewModel.selectTrainingMode(SelectedTrainingMode.TIME_ATTACK)
+        advanceUntilIdle()
+
+        // 1. Response window clamping: 1.0s to 3.5s
+        viewModel.setTimeAttackResponseWindow(0.2f)
+        assertEquals(1.0f, viewModel.uiState.value.timeAttackResponseWindowSeconds, 0.001f)
+
+        viewModel.setTimeAttackResponseWindow(5.0f)
+        assertEquals(3.5f, viewModel.uiState.value.timeAttackResponseWindowSeconds, 0.001f)
+
+        viewModel.setTimeAttackResponseWindow(2.2f)
+        assertEquals(2.2f, viewModel.uiState.value.timeAttackResponseWindowSeconds, 0.001f)
+
+        // 2. Inter-challenge delay clamping: 200ms to 5000ms
+        viewModel.setTimeAttackInterChallengeDelay(50L)
+        assertEquals(200L, viewModel.uiState.value.timeAttackInterChallengeDelayMs)
+
+        viewModel.setTimeAttackInterChallengeDelay(8000L)
+        assertEquals(5000L, viewModel.uiState.value.timeAttackInterChallengeDelayMs)
+
+        viewModel.setTimeAttackInterChallengeDelay(1200L)
+        assertEquals(1200L, viewModel.uiState.value.timeAttackInterChallengeDelayMs)
+
+        // 3. Challenge count clamping: 5 to 100
+        viewModel.setTimeAttackChallengeCount(2)
+        assertEquals(5, viewModel.uiState.value.timeAttackChallengeCount)
+
+        viewModel.setTimeAttackChallengeCount(600)
+        assertEquals(100, viewModel.uiState.value.timeAttackChallengeCount)
+
+        viewModel.setTimeAttackChallengeCount(30)
+        assertEquals(30, viewModel.uiState.value.timeAttackChallengeCount)
+
+        // 4. Character toggling
+        viewModel.setTimeAttackCharacters(setOf('K', 'M', 'R'))
+        assertEquals(setOf('K', 'M', 'R'), viewModel.uiState.value.timeAttackSelectedCharacters)
+
+        viewModel.toggleTimeAttackCharacter('M')
+        assertEquals(setOf('K', 'R'), viewModel.uiState.value.timeAttackSelectedCharacters)
+
+        viewModel.toggleTimeAttackCharacter('A')
+        assertEquals(setOf('K', 'R', 'A'), viewModel.uiState.value.timeAttackSelectedCharacters)
+
+        // Prevent toggling down to empty set
+        viewModel.toggleTimeAttackCharacter('K')
+        viewModel.toggleTimeAttackCharacter('R')
+        viewModel.toggleTimeAttackCharacter('A')
+        assertTrue(viewModel.uiState.value.timeAttackSelectedCharacters.isNotEmpty())
+    }
+
+    @Test
+    fun timeAttack_drillExecution_timeoutRegistersMissedAndPersistsReport() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        viewModel.selectTrainingMode(SelectedTrainingMode.TIME_ATTACK)
+        viewModel.setTimeAttackCharacters(setOf('K'))
+        viewModel.setTimeAttackResponseWindow(1.0f)
+        viewModel.setTimeAttackInterChallengeDelay(300L)
+        viewModel.setTimeAttackChallengeCount(2)
+        advanceUntilIdle()
+
+        // Start Time Attack drill for 2 challenges
+        viewModel.startLesson(2)
+        testScheduler.runCurrent()
+        assertEquals(DrillState.DrillActive, viewModel.uiState.value.drillState)
+        assertEquals(SelectedTrainingMode.TIME_ATTACK, viewModel.uiState.value.selectedTrainingMode)
+
+        // Advance through the entire drill (timeout without input)
+        advanceUntilIdle()
+
+        // Verify drill finished
+        val finishedState = viewModel.uiState.value
+        assertEquals(DrillState.Finished, finishedState.drillState)
+        assertEquals(2, finishedState.timeAttackMissedCount)
+        assertEquals(0, finishedState.timeAttackCorrectCount)
+        assertEquals(0, finishedState.timeAttackIncorrectCount)
+        assertEquals(0.0f, finishedState.sessionAccuracy, 0.001f)
+
+        // Verify comprehensive report in state and repository
+        val report = finishedState.latestTimeAttackReport
+        assertNotNull(report)
+        assertEquals(2, report?.challengeCount)
+        assertEquals(2, report?.missedCount)
+        assertEquals(0, report?.correctCount)
+        assertEquals(0, report?.incorrectCount)
+        assertEquals(0.0f, report?.accuracyPercentage ?: 100f, 0.001f)
+
+        val savedReports = fakeRepository.getTimeAttackReports(testProfile.id)
+        assertEquals(1, savedReports.size)
+        assertEquals(report?.id, savedReports[0].id)
+        val decodedResults = savedReports[0].toChallengeResults()
+        assertEquals(2, decodedResults.size)
+        assertTrue(decodedResults.all { it.outcome == TimeAttackOutcome.MISSED })
+    }
+
+    @Test
+    fun timeAttack_drillExecution_evaluatesCorrectAndIncorrectGuesses() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        viewModel.selectTrainingMode(SelectedTrainingMode.TIME_ATTACK)
+        viewModel.setTimeAttackCharacters(setOf('K'))
+        viewModel.setTimeAttackResponseWindow(2.0f)
+        viewModel.setTimeAttackInterChallengeDelay(200L)
+        viewModel.setTimeAttackChallengeCount(2)
+        advanceUntilIdle()
+
+        // Start drill with 2 challenges
+        viewModel.startLesson(2)
+
+        // Run until first challenge is waiting for input
+        testScheduler.advanceTimeBy(100)
+        assertTrue(viewModel.uiState.value.isTimeAttackAwaitingInput)
+        assertEquals("K", viewModel.uiState.value.targetCharacter)
+
+        // Challenge 1: Submit correct guess
+        viewModel.submitGuess("K")
+        testScheduler.advanceTimeBy(100)
+
+        // Result shown, delay passes
+        testScheduler.advanceTimeBy(300)
+
+        // Challenge 2: Next target waiting for input
+        assertTrue(viewModel.uiState.value.isTimeAttackAwaitingInput)
+        assertEquals("K", viewModel.uiState.value.targetCharacter)
+
+        // Challenge 2: Submit incorrect guess
+        viewModel.submitGuess("M")
+
+        // Finish remaining execution
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals(DrillState.Finished, state.drillState)
+        assertEquals(1, state.timeAttackCorrectCount)
+        assertEquals(1, state.timeAttackIncorrectCount)
+        assertEquals(0, state.timeAttackMissedCount)
+        assertEquals(50.0f, state.sessionAccuracy, 0.001f)
+
+        val report = state.latestTimeAttackReport
+        assertNotNull(report)
+        assertEquals(1, report?.correctCount)
+        assertEquals(1, report?.incorrectCount)
+        assertEquals(0, report?.missedCount)
+        assertEquals(50.0f, report?.accuracyPercentage ?: 0f, 0.001f)
+    }
+
+    @Test
+    fun timeAttack_returnToModeSelection_cancelsJobAndResetsState() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        viewModel.selectTrainingMode(SelectedTrainingMode.TIME_ATTACK)
+        viewModel.setTimeAttackCharacters(setOf('K'))
+        viewModel.startLesson(5)
+        testScheduler.advanceTimeBy(50)
+
+        assertEquals(DrillState.DrillActive, viewModel.uiState.value.drillState)
+
+        // User quits / returns to mode selection mid-drill
+        viewModel.returnToModeSelection()
+        advanceUntilIdle()
+
+        val resetState = viewModel.uiState.value
+        assertEquals(DrillState.ModeSelection, resetState.drillState)
+        assertEquals(SelectedTrainingMode.None, resetState.selectedTrainingMode)
+        assertFalse(resetState.isTimeAttackAwaitingInput)
+        assertEquals(1.0f, resetState.timeAttackTimerFraction, 0.001f)
+        assertEquals(0.0f, resetState.timeAttackRemainingSeconds, 0.001f)
+    }
+
+    @Test
+    fun timeAttack_dotRepVisualAid_hiddenDuringTimeAttack() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        // In Time Attack mode, visual aid dotrep hints should strictly be null
+        viewModel.selectTrainingMode(SelectedTrainingMode.TIME_ATTACK)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isTimeAttackMode)
+        assertNull(viewModel.uiState.value.visualAidText)
+    }
+
+    @Test
+    fun timeAttack_history_loadsAndTogglesVisibility() = runTest(testDispatcher) {
+        viewModel.setActiveProfile(testProfile)
+        advanceUntilIdle()
+
+        // Initially history is not showing
+        assertFalse(viewModel.uiState.value.isShowingTimeAttackHistory)
+
+        // Save a test report directly into repository
+        val report = TimeAttackReport(
+            profileId = testProfile.id,
+            responseWindowSeconds = 2.0f,
+            interChallengeDelayMs = 1000L,
+            challengeCount = 10,
+            includedCharacters = "KMR",
+            correctCount = 8,
+            incorrectCount = 1,
+            missedCount = 1,
+            detailsEncoded = "K|K|CORRECT|450;M|M|CORRECT|520"
+        )
+        fakeRepository.saveTimeAttackReport(report)
+
+        // Show history
+        viewModel.showTimeAttackHistory(true)
+        advanceUntilIdle()
+
+        val showingState = viewModel.uiState.value
+        assertTrue(showingState.isShowingTimeAttackHistory)
+        assertEquals(1, showingState.timeAttackHistory.size)
+        assertEquals(8, showingState.timeAttackHistory[0].correctCount)
+
+        // Dismiss history
+        viewModel.showTimeAttackHistory(false)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.isShowingTimeAttackHistory)
     }
 }

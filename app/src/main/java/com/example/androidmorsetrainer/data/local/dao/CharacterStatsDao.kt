@@ -7,6 +7,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import com.example.androidmorsetrainer.data.local.entity.CharacterStats
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackReport
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -44,4 +45,16 @@ interface CharacterStatsDao {
 
     @Query("DELETE FROM character_stats WHERE profile_id = :profileId")
     suspend fun deleteStatsForProfile(profileId: Long)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTimeAttackReport(report: TimeAttackReport): Long
+
+    @Query("SELECT * FROM time_attack_reports WHERE profile_id = :profileId ORDER BY timestamp DESC")
+    suspend fun getTimeAttackReportsForProfile(profileId: Long): List<TimeAttackReport>
+
+    @Query("SELECT * FROM time_attack_reports WHERE profile_id = :profileId ORDER BY timestamp DESC")
+    fun getTimeAttackReportsFlow(profileId: Long): Flow<List<TimeAttackReport>>
+
+    @Query("SELECT * FROM time_attack_reports WHERE id = :reportId LIMIT 1")
+    suspend fun getTimeAttackReportById(reportId: Long): TimeAttackReport?
 }

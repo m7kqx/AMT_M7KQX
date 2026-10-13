@@ -20,19 +20,22 @@ enum class SelectedTrainingMode {
     None,
     Koch,
     Prosign,
-    FOCUS;
+    FOCUS,
+    TIME_ATTACK;
 
     val trainingMode: TrainingMode?
         get() = when (this) {
             Koch -> TrainingMode.Koch
             Prosign -> TrainingMode.Prosigns
             FOCUS -> TrainingMode.Koch
+            TIME_ATTACK -> TrainingMode.Koch
             None -> null
         }
 
     companion object {
         val Prosigns: SelectedTrainingMode get() = Prosign
         val Focus: SelectedTrainingMode get() = FOCUS
+        val TimeAttack: SelectedTrainingMode get() = TIME_ATTACK
     }
 }
 
@@ -86,10 +89,27 @@ data class TrainUiState(
     val characterAccuracies: Map<String, Float> = emptyMap(),
     val prosignTextInput: String = "",
     val hideBottomBarPreference: Boolean = false,
-    val focusSelectedCharacters: Set<Char> = setOf('K', 'M', 'R')
+    val focusSelectedCharacters: Set<Char> = setOf('K', 'M', 'R'),
+    val timeAttackResponseWindowSeconds: Float = 2.0f,
+    val timeAttackInterChallengeDelayMs: Long = 1000L,
+    val timeAttackChallengeCount: Int = 20,
+    val timeAttackSelectedCharacters: Set<Char> = setOf('K', 'M', 'R'),
+    val timeAttackCorrectCount: Int = 0,
+    val timeAttackIncorrectCount: Int = 0,
+    val timeAttackMissedCount: Int = 0,
+    val timeAttackChallengeResults: List<com.example.androidmorsetrainer.data.local.entity.TimeAttackChallengeResult> = emptyList(),
+    val latestTimeAttackReport: com.example.androidmorsetrainer.data.local.entity.TimeAttackReport? = null,
+    val timeAttackTimerFraction: Float = 1.0f,
+    val timeAttackRemainingSeconds: Float = 0.0f,
+    val isTimeAttackAwaitingInput: Boolean = false,
+    val timeAttackHistory: List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport> = emptyList(),
+    val isShowingTimeAttackHistory: Boolean = false
 ) {
     val isFocusMode: Boolean
         get() = selectedTrainingMode == SelectedTrainingMode.FOCUS
+
+    val isTimeAttackMode: Boolean
+        get() = selectedTrainingMode == SelectedTrainingMode.TIME_ATTACK
 
     val currentLevel: Int
         get() = if (trainingMode == TrainingMode.Prosigns) activeProsignLevel else activeKochLevel
@@ -98,7 +118,7 @@ data class TrainUiState(
         get() = newlyIntroducedCharacter ?: activeHintCharacter
 
     val visualAidText: String?
-        get() = if (!isVisualAidActive || !showNewCharacterVisualAid) {
+        get() = if (isTimeAttackMode || !isVisualAidActive || !showNewCharacterVisualAid) {
             null
         } else if (activeHintCharacter != null && activeHintDotRep != null) {
             "$activeHintCharacter $activeHintDotRep"

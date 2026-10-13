@@ -9,19 +9,26 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.androidmorsetrainer.MorseTrainerApplication
 import com.example.androidmorsetrainer.audio.MorseAudioGenerator
 import com.example.androidmorsetrainer.data.local.entity.CharacterStats
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackChallengeResult
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackOutcome
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackReport
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
 import com.example.androidmorsetrainer.data.repository.ProfileRepository
 import com.example.androidmorsetrainer.morse.KochMethodManager
 import com.example.androidmorsetrainer.morse.MorseConstants
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -77,6 +84,8 @@ class TrainViewModel(
     private val characterCorrectAttempts = ConcurrentHashMap<String, Int>()
     private var playbackJob: Job? = null
     private var guessJob: Job? = null
+    private var timeAttackJob: Job? = null
+    private var activeTimeAttackInputDeferred: CompletableDeferred<String?>? = null
 
     private fun getCharactersForMode(mode: TrainingMode, level: Int): List<String> {
         return if (mode == TrainingMode.Prosigns) {
@@ -418,6 +427,7 @@ class TrainViewModel(
                     characterAccuracies = getCharacterAccuracies()
                 )
             }
+            observeTimeAttackReports(profile.id)
         }
     }
 
@@ -430,6 +440,7 @@ class TrainViewModel(
             SelectedTrainingMode.Koch -> TrainingMode.Koch
             SelectedTrainingMode.Prosign -> TrainingMode.Prosigns
             SelectedTrainingMode.FOCUS -> TrainingMode.Koch
+            SelectedTrainingMode.TIME_ATTACK -> TrainingMode.Koch
             SelectedTrainingMode.None -> _uiState.value.trainingMode
         }
         val targetDrillState = if (selectedMode == SelectedTrainingMode.None) {
@@ -444,15 +455,24 @@ class TrainViewModel(
             _uiState.value.focusSelectedCharacters
         }
 
+        val timeAttackChars = if (_uiState.value.timeAttackSelectedCharacters.isEmpty()) {
+            setOf('K', 'M', 'R')
+        } else {
+            _uiState.value.timeAttackSelectedCharacters
+        }
+
         _uiState.update {
             it.copy(
                 selectedTrainingMode = selectedMode,
                 trainingMode = mappedMode,
                 drillState = targetDrillState,
                 focusSelectedCharacters = focusChars,
-                availableCharacters = if (selectedMode == SelectedTrainingMode.FOCUS) {
-                    focusChars.map { c -> c.toString() }
-                } else it.availableCharacters
+                timeAttackSelectedCharacters = timeAttackChars,
+                availableCharacters = when (selectedMode) {
+                    SelectedTrainingMode.FOCUS -> focusChars.map { c -> c.toString() }
+                    SelectedTrainingMode.TIME_ATTACK -> timeAttackChars.map { c -> c.toString() }
+                    else -> it.availableCharacters
+                }
             )
         }
 
@@ -465,9 +485,12 @@ class TrainViewModel(
                     trainingMode = mappedMode,
                     drillState = DrillState.DrillSetup,
                     focusSelectedCharacters = focusChars,
-                    availableCharacters = if (selectedMode == SelectedTrainingMode.FOCUS) {
-                        focusChars.map { c -> c.toString() }
-                    } else it.availableCharacters
+                    timeAttackSelectedCharacters = timeAttackChars,
+                    availableCharacters = when (selectedMode) {
+                        SelectedTrainingMode.FOCUS -> focusChars.map { c -> c.toString() }
+                        SelectedTrainingMode.TIME_ATTACK -> timeAttackChars.map { c -> c.toString() }
+                        else -> it.availableCharacters
+                    }
                 )
             }
         }
@@ -516,6 +539,99 @@ class TrainViewModel(
         toggleFocusCharacter(firstChar)
     }
 
+    /**
+     * Time Attack drill configuration functions.
+     */
+    fun setTimeAttackResponseWindow(seconds: Float) {
+        val clamped = seconds.coerceIn(1.0f, 3.5f)
+        _uiState.update { it.copy(timeAttackResponseWindowSeconds = clamped) }
+    }
+
+    private var timeAttackReportsJob: kotlinx.coroutines.Job? = null
+
+    private fun observeTimeAttackReports(profileId: Long) {
+        timeAttackReportsJob?.cancel()
+        timeAttackReportsJob = viewModelScope.launch(ioDispatcher) {
+            profileRepository.getTimeAttackReportsFlow(profileId).collect { reports ->
+                _uiState.update { it.copy(timeAttackHistory = reports) }
+            }
+        }
+    }
+
+    fun showTimeAttackHistory(show: Boolean = true) {
+        _uiState.update { it.copy(isShowingTimeAttackHistory = show) }
+        val profileId = _uiState.value.activeProfile?.id
+        if (profileId != null && show) {
+            viewModelScope.launch(ioDispatcher) {
+                val reports = profileRepository.getTimeAttackReports(profileId)
+                _uiState.update { it.copy(timeAttackHistory = reports) }
+            }
+        }
+    }
+
+    fun setTimeAttackInterChallengeDelay(delayMs: Long) {
+        val clamped = delayMs.coerceIn(200L, 5000L)
+        _uiState.update { it.copy(timeAttackInterChallengeDelayMs = clamped) }
+    }
+
+    fun setTimeAttackChallengeCount(count: Int) {
+        val clamped = count.coerceIn(5, 100)
+        _uiState.update {
+            it.copy(
+                timeAttackChallengeCount = clamped,
+                selectedDrillLength = clamped,
+                sessionBatchSize = clamped
+            )
+        }
+    }
+
+    fun toggleTimeAttackCharacter(character: Char) {
+        val upperChar = character.uppercaseChar()
+        if (!MorseConstants.MORSE_MAP.containsKey(upperChar.toString())) return
+
+        _uiState.update { state ->
+            val current = state.timeAttackSelectedCharacters
+            if (upperChar in current) {
+                if (current.size > 1) {
+                    val updated = current - upperChar
+                    state.copy(
+                        timeAttackSelectedCharacters = updated,
+                        availableCharacters = if (state.selectedTrainingMode == SelectedTrainingMode.TIME_ATTACK) {
+                            updated.map { it.toString() }
+                        } else state.availableCharacters
+                    )
+                } else {
+                    state
+                }
+            } else {
+                val updated = current + upperChar
+                state.copy(
+                    timeAttackSelectedCharacters = updated,
+                    availableCharacters = if (state.selectedTrainingMode == SelectedTrainingMode.TIME_ATTACK) {
+                        updated.map { it.toString() }
+                    } else state.availableCharacters
+                )
+            }
+        }
+    }
+
+    fun toggleTimeAttackCharacter(character: String) {
+        val firstChar = character.trim().firstOrNull() ?: return
+        toggleTimeAttackCharacter(firstChar)
+    }
+
+    fun setTimeAttackCharacters(characters: Set<Char>) {
+        if (characters.isEmpty()) return
+        _uiState.update {
+            it.copy(
+                timeAttackSelectedCharacters = characters,
+                availableCharacters = if (it.selectedTrainingMode == SelectedTrainingMode.TIME_ATTACK) {
+                    characters.map { c -> c.toString() }
+                } else it.availableCharacters
+            )
+        }
+    }
+
     fun selectTrainingMode(mode: TrainingMode) {
         selectTrainingMode(
             when (mode) {
@@ -531,6 +647,9 @@ class TrainViewModel(
     fun returnToModeSelection() {
         guessJob?.cancel()
         playbackJob?.cancel()
+        timeAttackJob?.cancel()
+        activeTimeAttackInputDeferred?.cancel()
+        activeTimeAttackInputDeferred = null
         audioGenerator.stop()
         receiveGuessBuffer = ""
         sessionCharacterAttempts.clear()
@@ -543,7 +662,11 @@ class TrainViewModel(
                 isPlayingAudio = false,
                 isReplayTone = false,
                 feedbackMessage = null,
-                levelUpMessage = null
+                levelUpMessage = null,
+                isTimeAttackAwaitingInput = false,
+                timeAttackTimerFraction = 1.0f,
+                timeAttackRemainingSeconds = 0.0f,
+                isShowingTimeAttackHistory = false
             )
         }
     }
@@ -556,7 +679,8 @@ class TrainViewModel(
         _uiState.update {
             it.copy(
                 selectedDrillLength = clamped,
-                sessionBatchSize = clamped
+                sessionBatchSize = clamped,
+                timeAttackChallengeCount = if (it.selectedTrainingMode == SelectedTrainingMode.TIME_ATTACK) clamped else it.timeAttackChallengeCount
             )
         }
     }
@@ -596,6 +720,12 @@ class TrainViewModel(
     fun startLesson(drillLength: Int? = null) {
         val currentState = _uiState.value
         val profile = currentState.activeProfile ?: return
+
+        if (currentState.selectedTrainingMode == SelectedTrainingMode.TIME_ATTACK) {
+            startTimeAttackDrill(drillLength)
+            return
+        }
+
         val batchSize = drillLength ?: currentState.selectedDrillLength
 
         if (currentState.selectedTrainingMode == SelectedTrainingMode.FOCUS && currentState.focusSelectedCharacters.size < 3) {
@@ -604,6 +734,9 @@ class TrainViewModel(
 
         guessJob?.cancel()
         playbackJob?.cancel()
+        timeAttackJob?.cancel()
+        activeTimeAttackInputDeferred?.cancel()
+        activeTimeAttackInputDeferred = null
         audioGenerator.stop()
         receiveGuessBuffer = ""
 
@@ -692,6 +825,9 @@ class TrainViewModel(
     fun returnToSetup() {
         guessJob?.cancel()
         playbackJob?.cancel()
+        timeAttackJob?.cancel()
+        activeTimeAttackInputDeferred?.cancel()
+        activeTimeAttackInputDeferred = null
         audioGenerator.stop()
         receiveGuessBuffer = ""
         sessionCharacterAttempts.clear()
@@ -714,11 +850,20 @@ class TrainViewModel(
             _uiState.update {
                 it.copy(
                     selectedTrainingMode = activeSelected,
+                    availableCharacters = when (activeSelected) {
+                        SelectedTrainingMode.FOCUS -> it.focusSelectedCharacters.map { c -> c.toString() }
+                        SelectedTrainingMode.TIME_ATTACK -> it.timeAttackSelectedCharacters.map { c -> c.toString() }
+                        else -> it.availableCharacters
+                    },
                     drillState = DrillState.DrillSetup,
                     currentChallengeIndex = 0,
                     targetCharacter = "",
                     feedbackMessage = null,
                     levelUpMessage = null,
+                    isTimeAttackAwaitingInput = false,
+                    timeAttackTimerFraction = 1.0f,
+                    timeAttackRemainingSeconds = 0.0f,
+                    isShowingTimeAttackHistory = false,
                     newlyIntroducedCharacter = newChar,
                     newCharacterDotRepresentation = dotRep,
                     newCharacterVisualAid = visualAid,
@@ -825,6 +970,14 @@ class TrainViewModel(
     fun submitGuess(guessedCharacter: String) {
         val currentState = _uiState.value
         val profile = currentState.activeProfile ?: return
+
+        if (currentState.isTimeAttackMode) {
+            if (currentState.isTimeAttackAwaitingInput && activeTimeAttackInputDeferred?.isCompleted == false) {
+                activeTimeAttackInputDeferred?.complete(guessedCharacter)
+            }
+            return
+        }
+
         val target = currentState.targetCharacter
         if (target.isEmpty() || currentState.drillState != DrillState.DrillActive) return
 
@@ -1212,6 +1365,9 @@ class TrainViewModel(
     fun quitDrill() {
         guessJob?.cancel()
         playbackJob?.cancel()
+        timeAttackJob?.cancel()
+        activeTimeAttackInputDeferred?.cancel()
+        activeTimeAttackInputDeferred = null
         audioGenerator.stop()
         receiveGuessBuffer = ""
         val currentState = _uiState.value
@@ -1240,9 +1396,11 @@ class TrainViewModel(
             _uiState.update {
                 it.copy(
                     selectedTrainingMode = activeSelected,
-                    availableCharacters = if (activeSelected == SelectedTrainingMode.FOCUS) {
-                        currentState.focusSelectedCharacters.map { it.toString() }
-                    } else currentState.availableCharacters,
+                    availableCharacters = when (activeSelected) {
+                        SelectedTrainingMode.FOCUS -> currentState.focusSelectedCharacters.map { c -> c.toString() }
+                        SelectedTrainingMode.TIME_ATTACK -> currentState.timeAttackSelectedCharacters.map { c -> c.toString() }
+                        else -> currentState.availableCharacters
+                    },
                     drillState = DrillState.DrillSetup,
                     currentChallengeIndex = 0,
                     targetCharacter = "",
@@ -1250,6 +1408,9 @@ class TrainViewModel(
                     isReplayTone = false,
                     feedbackMessage = null,
                     levelUpMessage = null,
+                    isTimeAttackAwaitingInput = false,
+                    timeAttackTimerFraction = 1.0f,
+                    timeAttackRemainingSeconds = 0.0f,
                     lastDrillAccuracy = drillAccInt,
                     overallAccuracy = overallAcc,
                     newlyIntroducedCharacter = newChar,
@@ -1263,6 +1424,251 @@ class TrainViewModel(
                     newCharacterSuccessCount = successCount,
                     characterSuccessCounts = getCharacterSuccessCounts(),
                     characterAccuracies = getCharacterAccuracies()
+                )
+            }
+        }
+    }
+
+    /**
+     * Implements the Time Attack state machine:
+     * - plays back character audio,
+     * - starts a coroutine timer based on user-defined response window (1.0 - 3.5s),
+     * - registers "missed" status if the timer expires without input,
+     * - validates user input if received,
+     * - applies user-specified inter-challenge delay,
+     * - loops until the challenge quantity is met,
+     * - saves and displays the comprehensive post-drill report.
+     */
+    fun startTimeAttackDrill(drillLength: Int? = null) {
+        val currentState = _uiState.value
+        val profile = currentState.activeProfile ?: return
+        val count = drillLength ?: currentState.timeAttackChallengeCount
+        val windowSec = currentState.timeAttackResponseWindowSeconds.coerceIn(1.0f, 3.5f)
+        val interDelayMs = currentState.timeAttackInterChallengeDelayMs.coerceIn(200L, 5000L)
+        val pool = currentState.timeAttackSelectedCharacters.ifEmpty { setOf('K', 'M', 'R') }
+        val poolList = pool.map { it.toString() }
+
+        guessJob?.cancel()
+        playbackJob?.cancel()
+        timeAttackJob?.cancel()
+        activeTimeAttackInputDeferred?.cancel()
+        activeTimeAttackInputDeferred = null
+        audioGenerator.stop()
+        receiveGuessBuffer = ""
+
+        timeAttackJob = viewModelScope.launch(ioDispatcher) {
+            val challengeResults = mutableListOf<TimeAttackChallengeResult>()
+
+            _uiState.update {
+                it.copy(
+                    drillState = DrillState.DrillActive,
+                    selectedTrainingMode = SelectedTrainingMode.TIME_ATTACK,
+                    sessionBatchSize = count,
+                    selectedDrillLength = count,
+                    timeAttackChallengeCount = count,
+                    timeAttackResponseWindowSeconds = windowSec,
+                    timeAttackInterChallengeDelayMs = interDelayMs,
+                    availableCharacters = poolList,
+                    currentChallengeIndex = 0,
+                    timeAttackCorrectCount = 0,
+                    timeAttackIncorrectCount = 0,
+                    timeAttackMissedCount = 0,
+                    sessionTotalAttempts = 0,
+                    sessionCorrectAttempts = 0,
+                    sessionAccuracy = 0.0f,
+                    lastDrillAccuracy = 0,
+                    timeAttackChallengeResults = emptyList(),
+                    latestTimeAttackReport = null,
+                    feedbackMessage = null,
+                    lastGuessedCharacter = null,
+                    lastGuessWasCorrect = null,
+                    isReplayTone = false
+                )
+            }
+
+            for (index in 1..count) {
+                if (!isActive) break
+
+                val target = poolList.random()
+
+                _uiState.update {
+                    it.copy(
+                        drillState = DrillState.DrillActive,
+                        currentChallengeIndex = index,
+                        targetCharacter = target,
+                        feedbackMessage = null,
+                        lastGuessedCharacter = null,
+                        lastGuessWasCorrect = null,
+                        timeAttackTimerFraction = 1.0f,
+                        timeAttackRemainingSeconds = windowSec,
+                        isTimeAttackAwaitingInput = false
+                    )
+                }
+
+                // 1. Playback of character audio
+                _uiState.update { it.copy(isPlayingAudio = true) }
+                try {
+                    audioGenerator.setWpm(_uiState.value.currentWpm)
+                    audioGenerator.playCharacter(target, _uiState.value.currentWpm)
+                } catch (e: CancellationException) {
+                    break
+                } catch (e: Exception) {
+                    Log.e(TAG, "Time Attack audio error: ${e.message}")
+                } finally {
+                    _uiState.update { it.copy(isPlayingAudio = false) }
+                }
+
+                if (!isActive) break
+
+                // 2. Start coroutine timer for response window and await input
+                val inputDeferred = CompletableDeferred<String?>()
+                activeTimeAttackInputDeferred = inputDeferred
+                _uiState.update { it.copy(isTimeAttackAwaitingInput = true) }
+
+                val startTime = System.currentTimeMillis()
+                val windowMs = (windowSec * 1000).toLong()
+
+                val tickerJob = launch {
+                    val updateInterval = 25L
+                    var elapsed = 0L
+                    while (elapsed < windowMs && isActive) {
+                        delay(updateInterval)
+                        elapsed = System.currentTimeMillis() - startTime
+                        val remSec = maxOf(0.0f, (windowMs - elapsed) / 1000.0f)
+                        val fraction = (remSec / windowSec).coerceIn(0.0f, 1.0f)
+                        _uiState.update {
+                            it.copy(
+                                timeAttackRemainingSeconds = remSec,
+                                timeAttackTimerFraction = fraction
+                            )
+                        }
+                    }
+                }
+
+                val receivedGuess = try {
+                    withTimeoutOrNull(windowMs) {
+                        inputDeferred.await()
+                    }
+                } catch (e: CancellationException) {
+                    null
+                } finally {
+                    tickerJob.cancel()
+                    activeTimeAttackInputDeferred = null
+                }
+
+                if (!isActive) break
+
+                val elapsedMs = (System.currentTimeMillis() - startTime).coerceAtMost(windowMs)
+
+                // 3. Evaluate outcome: CORRECT, INCORRECT, or MISSED
+                val outcome: TimeAttackOutcome
+                val feedback: String
+                val isCorrect: Boolean
+
+                if (receivedGuess == null) {
+                    // Register "missed" status if timer expires without input
+                    outcome = TimeAttackOutcome.MISSED
+                    feedback = "Missed! Target was '$target'"
+                    isCorrect = false
+                    _uiState.update {
+                        it.copy(
+                            timeAttackMissedCount = it.timeAttackMissedCount + 1,
+                            sessionTotalAttempts = it.sessionTotalAttempts + 1
+                        )
+                    }
+                } else {
+                    // Validate user input if received
+                    val cleanGuess = receivedGuess.replace("<", "").replace(">", "").trim().uppercase()
+                    val cleanTarget = target.replace("<", "").replace(">", "").trim().uppercase()
+                    if (cleanGuess == cleanTarget) {
+                        outcome = TimeAttackOutcome.CORRECT
+                        feedback = "Correct! '$target' (${elapsedMs}ms)"
+                        isCorrect = true
+                        _uiState.update {
+                            it.copy(
+                                timeAttackCorrectCount = it.timeAttackCorrectCount + 1,
+                                sessionCorrectAttempts = it.sessionCorrectAttempts + 1,
+                                sessionTotalAttempts = it.sessionTotalAttempts + 1
+                            )
+                        }
+                    } else {
+                        outcome = TimeAttackOutcome.INCORRECT
+                        feedback = "Incorrect. Target was '$target', guessed '$cleanGuess'"
+                        isCorrect = false
+                        _uiState.update {
+                            it.copy(
+                                timeAttackIncorrectCount = it.timeAttackIncorrectCount + 1,
+                                sessionTotalAttempts = it.sessionTotalAttempts + 1
+                            )
+                        }
+                    }
+                }
+
+                val challengeResult = TimeAttackChallengeResult(
+                    target = target,
+                    guess = receivedGuess,
+                    outcome = outcome,
+                    responseTimeMs = elapsedMs
+                )
+                challengeResults.add(challengeResult)
+
+                val totalDone = challengeResults.size
+                val correctDone = challengeResults.count { it.outcome == TimeAttackOutcome.CORRECT }
+                val acc = if (totalDone > 0) (correctDone.toFloat() / totalDone) * 100.0f else 0.0f
+
+                _uiState.update {
+                    it.copy(
+                        drillState = DrillState.ShowingResult,
+                        isTimeAttackAwaitingInput = false,
+                        timeAttackTimerFraction = 0.0f,
+                        timeAttackRemainingSeconds = 0.0f,
+                        lastGuessedCharacter = receivedGuess,
+                        lastGuessWasCorrect = isCorrect,
+                        feedbackMessage = feedback,
+                        sessionAccuracy = acc,
+                        lastDrillAccuracy = Math.round(acc).toInt(),
+                        timeAttackChallengeResults = challengeResults.toList()
+                    )
+                }
+
+                // 4. Apply user-specified inter-challenge delay
+                if (index < count) {
+                    delay(interDelayMs)
+                }
+            }
+
+            if (!isActive) return@launch
+
+            // 5. Build comprehensive session report and save to Room
+            val finalReport = TimeAttackReport(
+                profileId = profile.id,
+                timestamp = System.currentTimeMillis(),
+                responseWindowSeconds = windowSec,
+                interChallengeDelayMs = interDelayMs,
+                challengeCount = challengeResults.size,
+                includedCharacters = poolList.joinToString(""),
+                correctCount = challengeResults.count { it.outcome == TimeAttackOutcome.CORRECT },
+                incorrectCount = challengeResults.count { it.outcome == TimeAttackOutcome.INCORRECT },
+                missedCount = challengeResults.count { it.outcome == TimeAttackOutcome.MISSED },
+                detailsEncoded = TimeAttackReport.encodeResults(challengeResults)
+            )
+
+            val reportId = try {
+                profileRepository.saveTimeAttackReport(finalReport)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error saving TimeAttackReport: ${e.message}", e)
+                0L
+            }
+            val savedReport = finalReport.copy(id = reportId)
+
+            _uiState.update {
+                it.copy(
+                    drillState = DrillState.Finished,
+                    latestTimeAttackReport = savedReport,
+                    timeAttackChallengeResults = challengeResults.toList(),
+                    lastDrillAccuracy = Math.round(savedReport.accuracyPercentage).toInt(),
+                    sessionAccuracy = savedReport.accuracyPercentage,
+                    isTimeAttackAwaitingInput = false
                 )
             }
         }

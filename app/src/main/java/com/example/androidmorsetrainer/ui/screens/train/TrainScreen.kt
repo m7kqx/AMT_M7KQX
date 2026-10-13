@@ -38,7 +38,16 @@ import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ExpandLess
+import java.text.DateFormat
+import java.util.Date
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackOutcome
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackChallengeResult
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackReport
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Slider
 import androidx.compose.ui.semantics.contentDescription
@@ -171,6 +180,15 @@ fun TrainScreen(
 
     if (activeProfile == null) {
         NoProfileScreen(modifier = modifier)
+    } else if (uiState.isShowingTimeAttackHistory) {
+        TimeAttackHistoryScreen(
+            uiState = uiState,
+            profileName = activeProfile.name,
+            onNavigateBack = {
+                viewModel.showTimeAttackHistory(false)
+            },
+            modifier = modifier
+        )
     } else {
         when (uiState.drillState) {
             DrillState.ModeSelection -> {
@@ -219,6 +237,13 @@ fun TrainScreen(
                             actualDspManager?.stopListening()
                             viewModel.selectTrainingMode(selectedMode)
                         },
+                        onSelectTimeAttackResponseWindow = viewModel::setTimeAttackResponseWindow,
+                        onSelectTimeAttackInterChallengeDelay = viewModel::setTimeAttackInterChallengeDelay,
+                        onSelectTimeAttackChallengeCount = viewModel::setTimeAttackChallengeCount,
+                        onToggleTimeAttackCharacter = viewModel::toggleTimeAttackCharacter,
+                        onOpenTimeAttackHistory = {
+                            viewModel.showTimeAttackHistory(true)
+                        },
                         modifier = modifier
                     )
                 }
@@ -228,7 +253,7 @@ fun TrainScreen(
                     uiState = uiState,
                     onStartNewDrill = {
                         actualDspManager?.stopListening()
-                        viewModel.startLesson(uiState.selectedDrillLength)
+                        viewModel.startLesson(if (uiState.isTimeAttackMode) uiState.timeAttackChallengeCount else uiState.selectedDrillLength)
                     },
                     onReturnToSetup = viewModel::returnToSetup,
                     onReturnToModeSelection = {
@@ -236,6 +261,9 @@ fun TrainScreen(
                         viewModel.returnToModeSelection()
                     },
                     onDismissLevelUpMessage = viewModel::dismissLevelUpMessage,
+                    onOpenTimeAttackHistory = {
+                        viewModel.showTimeAttackHistory(true)
+                    },
                     modifier = modifier
                 )
             }
@@ -317,6 +345,16 @@ fun TrainModeSelection(
                 poolBadge = "${uiState.focusSelectedCharacters.size} Characters",
                 icon = Icons.Default.Tune,
                 featureTag = "Custom 3–8 Selection"
+            ),
+            TrainingModeCardItem(
+                mode = SelectedTrainingMode.TIME_ATTACK,
+                title = "Time Attack",
+                subtitle = "Rapid Reflex Decoding",
+                description = "Decode Morse characters within a strict 1.0 to 3.5-second countdown window. Challenges your reflex speed with custom character subsets and detailed reporting of correct, incorrect, and missed responses.",
+                levelBadge = "${String.format(java.util.Locale.US, "%.1f", uiState.timeAttackResponseWindowSeconds)}s Window",
+                poolBadge = "${uiState.timeAttackSelectedCharacters.size} Characters",
+                icon = Icons.Default.Timer,
+                featureTag = "1.0–3.5s Reaction Timer"
             )
         )
     }
@@ -701,11 +739,17 @@ fun TrainSetupScreen(
     onStartDrill: () -> Unit,
     modifier: Modifier = Modifier,
     onToggleFocusCharacter: (Char) -> Unit = {},
-    onSelectSelectedTrainingMode: (SelectedTrainingMode) -> Unit = {}
+    onSelectSelectedTrainingMode: (SelectedTrainingMode) -> Unit = {},
+    onSelectTimeAttackResponseWindow: (Float) -> Unit = {},
+    onSelectTimeAttackInterChallengeDelay: (Long) -> Unit = {},
+    onSelectTimeAttackChallengeCount: (Int) -> Unit = {},
+    onToggleTimeAttackCharacter: (Char) -> Unit = {},
+    onOpenTimeAttackHistory: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
-    val isFocusMode = uiState.selectedTrainingMode == SelectedTrainingMode.FOCUS || uiState.isFocusMode
-    val isProsignMode = !isFocusMode && (uiState.trainingMode == TrainingMode.Prosigns || uiState.selectedTrainingMode == SelectedTrainingMode.Prosign)
+    val isTimeAttackMode = uiState.selectedTrainingMode == SelectedTrainingMode.TIME_ATTACK || uiState.isTimeAttackMode
+    val isFocusMode = !isTimeAttackMode && (uiState.selectedTrainingMode == SelectedTrainingMode.FOCUS || uiState.isFocusMode)
+    val isProsignMode = !isTimeAttackMode && !isFocusMode && (uiState.trainingMode == TrainingMode.Prosigns || uiState.selectedTrainingMode == SelectedTrainingMode.Prosign)
 
     Column(
         modifier = modifier
@@ -743,6 +787,7 @@ fun TrainSetupScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = when {
+                                isTimeAttackMode -> "TIME ATTACK DRILL SETUP"
                                 isFocusMode -> "FOCUS DRILL SETUP"
                                 isProsignMode -> "PROSIGN DRILL SETUP"
                                 else -> "KOCH DRILL SETUP"
@@ -753,6 +798,7 @@ fun TrainSetupScreen(
                         )
                         Text(
                             text = when {
+                                isTimeAttackMode -> "${String.format(java.util.Locale.US, "%.1f", uiState.timeAttackResponseWindowSeconds)}s Reaction Window"
                                 isFocusMode -> "Custom Focus (${uiState.focusSelectedCharacters.size}/8)"
                                 isProsignMode -> "Prosigns Level ${uiState.activeProsignLevel} of 12"
                                 else -> "Koch Level ${uiState.activeKochLevel} of ${MorseConstants.MAX_KOCH_LEVEL}"
@@ -777,6 +823,7 @@ fun TrainSetupScreen(
                     ) {
                         Text(
                             text = when {
+                                isTimeAttackMode -> "${uiState.timeAttackSelectedCharacters.size} Chars"
                                 isFocusMode -> "${uiState.focusSelectedCharacters.size} Chars"
                                 isProsignMode -> "${uiState.availableCharacters.size} Prosigns"
                                 else -> "${uiState.availableCharacters.size} Chars"
@@ -791,6 +838,7 @@ fun TrainSetupScreen(
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
                     text = when {
+                        isTimeAttackMode -> "Time Attack challenges users to decode characters within a strict 1.0 to 3.5-second countdown window, recording correct, incorrect, and missed responses for detailed review."
                         isFocusMode -> "Focus mode allows custom selection of 3 to 8 characters for concentrated practice at standard Paris timing (10–25 WPM) with visual dotrep hints."
                         isProsignMode -> "Prosigns training focuses on procedural signals (<AR>, <SK>, <BT>, <AS>, <SOS>) and common radio abbreviations with multi-character entry and continuous tone spacing upon proficiency."
                         else -> "Koch method sequentially introduces individual Morse characters at full target speed (10–25 WPM) with dynamic priority weighting to build acoustic reflex recognition."
@@ -804,15 +852,15 @@ fun TrainSetupScreen(
                 // Mode switching chips
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     FilterChip(
-                        selected = !isProsignMode && !isFocusMode,
+                        selected = !isProsignMode && !isFocusMode && !isTimeAttackMode,
                         onClick = {
                             onSelectSelectedTrainingMode(SelectedTrainingMode.Koch)
                             onSelectTrainingMode(TrainingMode.Koch)
                         },
-                        label = { Text("Koch Method") },
+                        label = { Text("Koch", maxLines = 1) },
                         modifier = Modifier.weight(1f)
                     )
                     FilterChip(
@@ -821,7 +869,7 @@ fun TrainSetupScreen(
                             onSelectSelectedTrainingMode(SelectedTrainingMode.Prosign)
                             onSelectTrainingMode(TrainingMode.Prosigns)
                         },
-                        label = { Text("Prosigns") },
+                        label = { Text("Prosigns", maxLines = 1) },
                         modifier = Modifier.weight(1f)
                     )
                     FilterChip(
@@ -829,7 +877,15 @@ fun TrainSetupScreen(
                         onClick = {
                             onSelectSelectedTrainingMode(SelectedTrainingMode.FOCUS)
                         },
-                        label = { Text("Focus Mode") },
+                        label = { Text("Focus", maxLines = 1) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = isTimeAttackMode,
+                        onClick = {
+                            onSelectSelectedTrainingMode(SelectedTrainingMode.TIME_ATTACK)
+                        },
+                        label = { Text("Time Attack", maxLines = 1) },
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -839,6 +895,7 @@ fun TrainSetupScreen(
                 // Active sequence chips - dynamically labeled based on active mode
                 Text(
                     text = when {
+                        isTimeAttackMode -> "Time Attack Character Pool (${uiState.timeAttackSelectedCharacters.size}):"
                         isFocusMode -> "Selected Characters (${uiState.focusSelectedCharacters.size}/8):"
                         isProsignMode -> "Active Prosigns Pool:"
                         else -> "Active Characters Pool:"
@@ -851,10 +908,10 @@ fun TrainSetupScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    val displayedPool = if (isFocusMode) {
-                        uiState.focusSelectedCharacters.sorted().map { it.toString() }
-                    } else {
-                        uiState.availableCharacters
+                    val displayedPool = when {
+                        isTimeAttackMode -> uiState.timeAttackSelectedCharacters.sorted().map { it.toString() }
+                        isFocusMode -> uiState.focusSelectedCharacters.sorted().map { it.toString() }
+                        else -> uiState.availableCharacters
                     }
                     displayedPool.forEach { char ->
                         val cleanChar = char.uppercase().replace("<", "").replace(">", "")
@@ -882,7 +939,432 @@ fun TrainSetupScreen(
             }
         }
 
-        if (isFocusMode) {
+        if (isTimeAttackMode) {
+            // 2. Response Window Slider Card (1.0 to 3.5s)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "RESPONSE WINDOW (1.0 – 3.5s)",
+                                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Strict timer window to decode character before marked missed",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                text = "${String.format(java.util.Locale.US, "%.1f", uiState.timeAttackResponseWindowSeconds)}s",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Slider(
+                        value = uiState.timeAttackResponseWindowSeconds.coerceIn(1.0f, 3.5f),
+                        onValueChange = { onSelectTimeAttackResponseWindow(Math.round(it * 10f) / 10f) },
+                        valueRange = 1.0f..3.5f,
+                        steps = 24,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "1.0s (Fast)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "3.5s (Relaxed)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // 3. Inter-Challenge Delay Slider Card (0.2 to 3.0s)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "INTER-CHALLENGE DELAY",
+                                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Pause duration between consecutive audio challenges",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                text = "${String.format(java.util.Locale.US, "%.1f", uiState.timeAttackInterChallengeDelayMs / 1000f)}s",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Slider(
+                        value = (uiState.timeAttackInterChallengeDelayMs / 1000f).coerceIn(0.2f, 3.0f),
+                        onValueChange = { onSelectTimeAttackInterChallengeDelay((it * 1000f).toLong()) },
+                        valueRange = 0.2f..3.0f,
+                        steps = 13,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "0.2s (Fast pace)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "3.0s (Paced)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // 4. Challenge Quantity Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp)
+                ) {
+                    Text(
+                        text = "CHALLENGE QUANTITY",
+                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Number of rapid-fire challenges in this drill session",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        val attackOptions = listOf(10 to "Sprint", 20 to "Standard", 30 to "Extended", 50 to "Endurance")
+                        attackOptions.forEach { (count, label) ->
+                            val isSelected = uiState.timeAttackChallengeCount == count
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onSelectTimeAttackChallengeCount(count) },
+                                modifier = Modifier.weight(1f),
+                                label = {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(text = "$count", fontWeight = FontWeight.Bold)
+                                        Text(text = label, style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 5. Playback Speed (WPM) Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "PLAYBACK SPEED (WPM)",
+                                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Standard Paris timing speed (10 to 25 WPM)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                text = "${uiState.currentWpm} WPM",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Slider(
+                        value = uiState.currentWpm.toFloat().coerceIn(10f, 25f),
+                        onValueChange = { onSelectWpm(it.roundToInt().coerceIn(10, 25)) },
+                        valueRange = 10f..25f,
+                        steps = 14,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "10 WPM",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "25 WPM",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // 6. Character Selection Virtual Keyboard Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "CHALLENGE CHARACTERS",
+                                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Select characters to include in the Time Attack challenge pool",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (uiState.timeAttackSelectedCharacters.isNotEmpty()) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.errorContainer
+                            }
+                        ) {
+                            Text(
+                                text = "${uiState.timeAttackSelectedCharacters.size} Selected",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (uiState.timeAttackSelectedCharacters.isNotEmpty()) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    if (uiState.timeAttackSelectedCharacters.isEmpty()) {
+                        Text(
+                            text = "⚠️ Select at least 1 character to practice.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
+
+                    FocusSelectionKeyboard(
+                        selectedCharacters = uiState.timeAttackSelectedCharacters,
+                        onKeyPress = onToggleTimeAttackCharacter
+                    )
+                }
+            }
+
+            // 7. Time Attack Objectives Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Time Attack Objectives",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "• Audio tones play at standard Paris timing (${uiState.currentWpm} WPM).",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "• Decode target within the strict ${String.format(java.util.Locale.US, "%.1f", uiState.timeAttackResponseWindowSeconds)}s reaction window.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "• If the countdown timer expires before input, the attempt is marked MISSED.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "• A pause of ${String.format(java.util.Locale.US, "%.1f", uiState.timeAttackInterChallengeDelayMs / 1000f)}s is applied between consecutive challenges.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "• A comprehensive post-drill report tracks correct, incorrect, and missed responses.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // 8. Time Attack Drill History Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "PAST DRILL REPORTS",
+                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = if (uiState.timeAttackHistory.isNotEmpty()) {
+                                "${uiState.timeAttackHistory.size} historical drill report${if (uiState.timeAttackHistory.size > 1) "s" else ""} available"
+                            } else {
+                                "View past Time Attack drill session history and challenge breakdown"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    OutlinedButton(
+                        onClick = onOpenTimeAttackHistory,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.History,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("View")
+                    }
+                }
+            }
+        } else if (isFocusMode) {
             // 2. Playback Speed (WPM) Slider Card for Focus Mode
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1334,7 +1816,11 @@ fun TrainSetupScreen(
         // 6. Prominent "Start Drill" Action Button
         Button(
             onClick = onStartDrill,
-            enabled = if (isFocusMode) uiState.focusSelectedCharacters.size in 3..8 else true,
+            enabled = when {
+                isTimeAttackMode -> uiState.timeAttackSelectedCharacters.isNotEmpty()
+                isFocusMode -> uiState.focusSelectedCharacters.size in 3..8
+                else -> true
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(60.dp),
@@ -1348,6 +1834,7 @@ fun TrainSetupScreen(
             ) {
                 Icon(
                     imageVector = when {
+                        isTimeAttackMode -> Icons.Default.Timer
                         isFocusMode -> Icons.Default.Tune
                         isProsignMode -> Icons.Default.Radio
                         else -> Icons.Default.School
@@ -1358,6 +1845,7 @@ fun TrainSetupScreen(
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
                     text = when {
+                        isTimeAttackMode -> "Start Time Attack (${uiState.timeAttackChallengeCount} Challenges)"
                         isFocusMode -> "Start Focus Drill (${uiState.selectedDrillLength} Challenges)"
                         isProsignMode -> "Start Prosign Drill (${uiState.selectedDrillLength} Challenges)"
                         else -> "Start Receive Drill (${uiState.selectedDrillLength} Challenges)"
@@ -1398,6 +1886,426 @@ private fun TrainPreDrillSetupContent(
     )
 }
 
+@Composable
+private fun TimeAttackChallengeResultRow(
+    index: Int,
+    result: TimeAttackChallengeResult,
+    modifier: Modifier = Modifier
+) {
+    val statusBg: Color
+    val statusFg: Color
+    val statusIcon: androidx.compose.ui.graphics.vector.ImageVector
+    val statusLabel: String
+
+    when (result.outcome) {
+        TimeAttackOutcome.CORRECT -> {
+            statusBg = Color(0xFFE8F5E9)
+            statusFg = Color(0xFF1B5E20)
+            statusIcon = Icons.Default.CheckCircle
+            statusLabel = "CORRECT"
+        }
+        TimeAttackOutcome.INCORRECT -> {
+            statusBg = Color(0xFFFFEBEE)
+            statusFg = Color(0xFFB71C1C)
+            statusIcon = Icons.Default.Cancel
+            statusLabel = if (!result.guess.isNullOrBlank()) "GUESS: ${result.guess}" else "INCORRECT"
+        }
+        TimeAttackOutcome.MISSED -> {
+            statusBg = Color(0xFFFFF8E1)
+            statusFg = Color(0xFFB45309)
+            statusIcon = Icons.Default.Timer
+            statusLabel = "MISSED (Timed out)"
+        }
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Left: Index & Target Character with Morse dot representation
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "#$index",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = result.target,
+                            style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+                val morse = MorseConstants.MORSE_MAP[result.target.uppercase()] ?: ""
+                if (morse.isNotEmpty()) {
+                    Text(
+                        text = morse,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Right: Outcome Chip and Response Time in ms
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = statusBg
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = statusIcon,
+                            contentDescription = null,
+                            tint = statusFg,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = statusFg
+                        )
+                    }
+                }
+
+                Text(
+                    text = if (result.outcome == TimeAttackOutcome.MISSED) "--" else "${result.responseTimeMs} ms",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Material 3 Completion Summary View for Time Attack Mode.
+ * Displays comprehensive session metrics and scrollable challenge audit log.
+ */
+@Composable
+private fun TimeAttackSummaryView(
+    uiState: TrainUiState,
+    onStartNewDrill: () -> Unit,
+    onReturnToSetup: () -> Unit,
+    onReturnToModeSelection: () -> Unit,
+    modifier: Modifier = Modifier,
+    onOpenTimeAttackHistory: () -> Unit = {}
+) {
+    val scrollState = rememberScrollState()
+    val report = uiState.latestTimeAttackReport
+    val results: List<TimeAttackChallengeResult> = report?.toChallengeResults() ?: uiState.timeAttackChallengeResults
+    val totalCount = report?.totalChallenges ?: if (results.isNotEmpty()) results.size else uiState.sessionBatchSize
+    val correctCount = report?.correctCount ?: results.count { it.outcome == TimeAttackOutcome.CORRECT }
+    val incorrectCount = report?.incorrectCount ?: results.count { it.outcome == TimeAttackOutcome.INCORRECT }
+    val missedCount = report?.missedCount ?: results.count { it.outcome == TimeAttackOutcome.MISSED }
+    val accuracyPct = if (totalCount > 0) Math.round((correctCount.toFloat() / totalCount) * 100f).toInt() else 0
+    val windowSec = report?.responseWindowSeconds ?: uiState.timeAttackResponseWindowSeconds
+    val delayMs = report?.interChallengeDelayMs ?: uiState.timeAttackInterChallengeDelayMs
+    val avgResponseMs = if (results.isNotEmpty()) {
+        val answered = results.filter { it.outcome != TimeAttackOutcome.MISSED }
+        if (answered.isNotEmpty()) Math.round(answered.map { it.responseTimeMs }.average()) else 0L
+    } else 0L
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // 1. Completion Header Trophy Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+            shape = RoundedCornerShape(22.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Timer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(64.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "TIME ATTACK COMPLETE!",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "Completed $totalCount challenges with ${String.format(java.util.Locale.US, "%.1f", windowSec)}s reaction window",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        // 2. Performance Breakdown Card (Accuracy, Correct, Incorrect, Missed)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+                Text(
+                    text = "Performance Breakdown",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    ScoreMetricTile(
+                        title = "Accuracy",
+                        value = "$accuracyPct%",
+                        valueColor = when {
+                            accuracyPct >= 80 -> Color(0xFF10B981)
+                            accuracyPct >= 60 -> Color(0xFFF59E0B)
+                            else -> MaterialTheme.colorScheme.error
+                        }
+                    )
+                    ScoreMetricTile(
+                        title = "Correct",
+                        value = "$correctCount",
+                        valueColor = Color(0xFF10B981)
+                    )
+                    ScoreMetricTile(
+                        title = "Incorrect",
+                        value = "$incorrectCount",
+                        valueColor = MaterialTheme.colorScheme.error
+                    )
+                    ScoreMetricTile(
+                        title = "Missed",
+                        value = "$missedCount",
+                        valueColor = Color(0xFFF59E0B)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Drill Parameters and Reaction Speed Summary
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Avg Reaction Time",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = if (avgResponseMs > 0) "$avgResponseMs ms" else "N/A",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Inter-Challenge Delay",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "$delayMs ms",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Practiced Characters",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            val charStr = if (!report?.includedCharacters.isNullOrEmpty()) {
+                                report?.includedCharacters ?: ""
+                            } else {
+                                uiState.timeAttackSelectedCharacters.sorted().joinToString("")
+                            }
+                            Text(
+                                text = charStr,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Comprehensive Challenge Audit Log
+        if (results.isNotEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Challenge Audit Log",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "${results.size} challenges",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        results.forEachIndexed { idx, item ->
+                            TimeAttackChallengeResultRow(
+                                index = idx + 1,
+                                result = item
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // 4. Action Buttons
+        Button(
+            onClick = onStartNewDrill,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+        ) {
+            Icon(Icons.Default.Refresh, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Start Another Time Attack (${uiState.timeAttackChallengeCount})",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        OutlinedButton(
+            onClick = onOpenTimeAttackHistory,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Icon(Icons.Default.History, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Past Drill Reports (${uiState.timeAttackHistory.size})",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        OutlinedButton(
+            onClick = onReturnToSetup,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Text(
+                text = "Change Time Attack Setup",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        TextButton(
+            onClick = onReturnToModeSelection,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "Choose Another Mode",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
 /**
  * Dedicated Material 3 Completion Summary Screen for Receive Mode.
  */
@@ -1408,8 +2316,21 @@ private fun TrainDrillSummaryContent(
     onReturnToSetup: () -> Unit,
     onDismissLevelUpMessage: () -> Unit,
     modifier: Modifier = Modifier,
-    onReturnToModeSelection: () -> Unit = {}
+    onReturnToModeSelection: () -> Unit = {},
+    onOpenTimeAttackHistory: () -> Unit = {}
 ) {
+    if (uiState.isTimeAttackMode || uiState.latestTimeAttackReport != null) {
+        TimeAttackSummaryView(
+            uiState = uiState,
+            onStartNewDrill = onStartNewDrill,
+            onReturnToSetup = onReturnToSetup,
+            onReturnToModeSelection = onReturnToModeSelection,
+            onOpenTimeAttackHistory = onOpenTimeAttackHistory,
+            modifier = modifier
+        )
+        return
+    }
+
     val scrollState = rememberScrollState()
 
     Column(
@@ -1598,6 +2519,390 @@ private fun TrainDrillSummaryContent(
     }
 }
 
+/**
+ * Dedicated Material 3 historical reports screen for Time Attack drills.
+ * Retrieves and lists past drill session records with expandable challenge breakdowns.
+ */
+@Composable
+fun TimeAttackHistoryScreen(
+    uiState: TrainUiState,
+    profileName: String,
+    onNavigateBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val history = uiState.timeAttackHistory
+    val dateFormat = remember { DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT) }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 1. Header Card with Back Navigation
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = onNavigateBack,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Return from history",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "TIME ATTACK HISTORY",
+                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.5.sp),
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = "Past Drill Reports",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        if (profileName.isNotEmpty()) {
+                            Text(
+                                text = "Trainee: $profileName",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.primary
+                    ) {
+                        Text(
+                            text = "${history.size} Drills",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Historical performance records from Time Attack drills, tracking reaction response windows, overall accuracy, and challenge breakdowns.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                )
+            }
+        }
+
+        // 2. Aggregate Summary Performance Card
+        if (history.isNotEmpty()) {
+            val totalChallenges = history.sumOf { it.totalChallenges }
+            val totalCorrect = history.sumOf { it.correctCount }
+            val totalIncorrect = history.sumOf { it.incorrectCount }
+            val totalMissed = history.sumOf { it.missedCount }
+            val overallAccuracy = if (totalChallenges > 0) {
+                Math.round((totalCorrect.toFloat() / totalChallenges) * 100f).toInt()
+            } else 0
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = "Overall Time Attack Performance",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        ScoreMetricTile(
+                            title = "Accuracy",
+                            value = "$overallAccuracy%",
+                            valueColor = when {
+                                overallAccuracy >= 80 -> Color(0xFF10B981)
+                                overallAccuracy >= 60 -> Color(0xFFF59E0B)
+                                else -> MaterialTheme.colorScheme.error
+                            }
+                        )
+                        ScoreMetricTile(
+                            title = "Correct",
+                            value = "$totalCorrect",
+                            valueColor = Color(0xFF10B981)
+                        )
+                        ScoreMetricTile(
+                            title = "Incorrect",
+                            value = "$totalIncorrect",
+                            valueColor = MaterialTheme.colorScheme.error
+                        )
+                        ScoreMetricTile(
+                            title = "Missed",
+                            value = "$totalMissed",
+                            valueColor = Color(0xFFF59E0B)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 3. Drill Reports List or Empty State
+        if (history.isEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.History,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "No Past Drill Reports",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Complete a Time Attack session to record reaction response times and challenge performance.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(history, key = { it.id }) { report ->
+                    TimeAttackHistoryReportCard(
+                        report = report,
+                        dateFormat = dateFormat
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimeAttackHistoryReportCard(
+    report: TimeAttackReport,
+    dateFormat: DateFormat,
+    modifier: Modifier = Modifier
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    val challengeResults = remember(report.detailsEncoded) { report.toChallengeResults() }
+    val accuracy = report.accuracyPercentage.roundToInt()
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            // Header: Date/Time and Accuracy Badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = dateFormat.format(Date(report.timestamp)),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "${String.format(java.util.Locale.US, "%.1f", report.responseWindowSeconds)}s window • ${report.totalChallenges} challenges",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = when {
+                        accuracy >= 80 -> Color(0xFFE8F5E9)
+                        accuracy >= 60 -> Color(0xFFFFF8E1)
+                        else -> Color(0xFFFFEBEE)
+                    }
+                ) {
+                    Text(
+                        text = "$accuracy%",
+                        style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            accuracy >= 80 -> Color(0xFF1B5E20)
+                            accuracy >= 60 -> Color(0xFFB45309)
+                            else -> Color(0xFFB71C1C)
+                        },
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Score Chips Row (Correct, Incorrect, Missed)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFE8F5E9),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Correct: ${report.correctCount}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF1B5E20)
+                        )
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFFFEBEE),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Incorrect: ${report.incorrectCount}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFB71C1C)
+                        )
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFFFF8E1),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Missed: ${report.missedCount}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFB45309)
+                        )
+                    }
+                }
+            }
+
+            if (report.includedCharacters.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Pool: ${report.includedCharacters}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Expand/Collapse Details Toggle
+            if (challengeResults.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(
+                        onClick = { isExpanded = !isExpanded },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = if (isExpanded) "Hide Details" else "View Details (${challengeResults.size})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (isExpanded) "Collapse details" else "Expand details",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = isExpanded,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        challengeResults.forEachIndexed { idx, item ->
+                            TimeAttackChallengeResultRow(
+                                index = idx + 1,
+                                result = item
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun NoProfileScreen(modifier: Modifier = Modifier) {
     Box(
@@ -1688,16 +2993,30 @@ fun TrainScreenContent(
             ScoreFeedbackCard(
                 accuracy = uiState.sessionAccuracy,
                 accuracyFormatted = uiState.accuracyFormatted,
-                correctCount = uiState.sessionCorrectAttempts,
-                totalCount = uiState.sessionTotalAttempts,
+                correctCount = if (uiState.isTimeAttackMode) uiState.timeAttackCorrectCount else uiState.sessionCorrectAttempts,
+                totalCount = if (uiState.isTimeAttackMode) (uiState.timeAttackCorrectCount + uiState.timeAttackIncorrectCount + uiState.timeAttackMissedCount) else uiState.sessionTotalAttempts,
                 minAttempts = uiState.sessionBatchSize,
                 onQuitDrill = onQuitDrill,
                 challengeIndex = uiState.currentChallengeIndex,
                 batchSize = uiState.sessionBatchSize,
-                progressFraction = uiState.progressFraction
+                progressFraction = uiState.progressFraction,
+                isTimeAttack = uiState.isTimeAttackMode,
+                timeAttackMissedCount = uiState.timeAttackMissedCount,
+                timeAttackResponseWindowSeconds = uiState.timeAttackResponseWindowSeconds
             )
 
-            // 3. Last Guess Outcome Feedback Banner (Horizontal compact layout)
+            // 3. Time Attack Reaction Timer Bar (Visible during Time Attack mode)
+            if (uiState.isTimeAttackMode) {
+                TimeAttackTimerBanner(
+                    remainingSeconds = uiState.timeAttackRemainingSeconds,
+                    totalSeconds = uiState.timeAttackResponseWindowSeconds,
+                    fraction = uiState.timeAttackTimerFraction,
+                    isAwaitingInput = uiState.isTimeAttackAwaitingInput,
+                    isPlayingAudio = uiState.isPlayingAudio
+                )
+            }
+
+            // 4. Last Guess Outcome Feedback Banner (Horizontal compact layout)
             if (uiState.lastGuessWasCorrect != null && uiState.feedbackMessage != null) {
                 GuessFeedbackBanner(
                     isCorrect = uiState.lastGuessWasCorrect,
@@ -1705,7 +3024,7 @@ fun TrainScreenContent(
                 )
             }
 
-            // 4. Active Character Prompt & WPM Speed Selector
+            // 5. Active Character Prompt & WPM Speed Selector
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1732,7 +3051,9 @@ fun TrainScreenContent(
                         }
                     }
                     Text(
-                        text = if (uiState.trainingMode == TrainingMode.Prosigns) {
+                        text = if (uiState.isTimeAttackMode) {
+                            "Time Attack: ${uiState.timeAttackSelectedCharacters.size} characters (${String.format(java.util.Locale.US, "%.1f", uiState.timeAttackResponseWindowSeconds)}s window)"
+                        } else if (uiState.trainingMode == TrainingMode.Prosigns) {
                             "Active characters for Prosigns Level ${uiState.activeProsignLevel}"
                         } else if (uiState.isFocusMode) {
                             "Focus practice with ${uiState.focusSelectedCharacters.size} characters"
@@ -1758,7 +3079,7 @@ fun TrainScreenContent(
             val visualAidText = uiState.visualAidText
 
             AnimatedVisibility(
-                visible = uiState.isVisualAidActive && uiState.showNewCharacterVisualAid && !visualAidText.isNullOrEmpty(),
+                visible = !uiState.isTimeAttackMode && uiState.isVisualAidActive && uiState.showNewCharacterVisualAid && !visualAidText.isNullOrEmpty(),
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -1853,7 +3174,7 @@ fun TrainScreenContent(
                     }
                 },
                 onRepeatClick = onPlayTone,
-                enabled = uiState.hasTarget && uiState.drillState == DrillState.DrillActive,
+                enabled = uiState.hasTarget && (if (uiState.isTimeAttackMode) uiState.isTimeAttackAwaitingInput else uiState.drillState == DrillState.DrillActive),
                 lastGuessedCharacter = if (uiState.trainingMode == TrainingMode.Prosigns) null else uiState.lastGuessedCharacter,
                 lastGuessWasCorrect = if (uiState.trainingMode == TrainingMode.Prosigns) null else uiState.lastGuessWasCorrect,
                 modifier = Modifier.fillMaxWidth()
@@ -2080,6 +3401,107 @@ private fun LevelUpBanner(
 }
 
 @Composable
+private fun TimeAttackTimerBanner(
+    remainingSeconds: Float,
+    totalSeconds: Float,
+    fraction: Float,
+    isAwaitingInput: Boolean,
+    isPlayingAudio: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Timer,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = when {
+                            isPlayingAudio -> MaterialTheme.colorScheme.primary
+                            isAwaitingInput && fraction > 0.4f -> Color(0xFF10B981)
+                            isAwaitingInput && fraction > 0.2f -> Color(0xFFF59E0B)
+                            isAwaitingInput -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = when {
+                            isPlayingAudio -> "Playing Audio..."
+                            isAwaitingInput -> "Reaction Countdown"
+                            else -> "Response Window"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = when {
+                        isPlayingAudio -> MaterialTheme.colorScheme.primaryContainer
+                        isAwaitingInput && fraction > 0.4f -> Color(0xFFE8F5E9)
+                        isAwaitingInput && fraction > 0.2f -> Color(0xFFFFF8E1)
+                        isAwaitingInput -> Color(0xFFFFEBEE)
+                        else -> MaterialTheme.colorScheme.surface
+                    }
+                ) {
+                    Text(
+                        text = when {
+                            isPlayingAudio -> "Listen..."
+                            isAwaitingInput -> "${String.format(java.util.Locale.US, "%.2f", remainingSeconds)}s left"
+                            else -> "${String.format(java.util.Locale.US, "%.1f", totalSeconds)}s window"
+                        },
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            isPlayingAudio -> MaterialTheme.colorScheme.onPrimaryContainer
+                            isAwaitingInput && fraction > 0.4f -> Color(0xFF1B5E20)
+                            isAwaitingInput && fraction > 0.2f -> Color(0xFFB45309)
+                            isAwaitingInput -> Color(0xFFB71C1C)
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            LinearProgressIndicator(
+                progress = { if (isPlayingAudio) 1f else fraction.coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp),
+                color = when {
+                    isPlayingAudio -> MaterialTheme.colorScheme.primary
+                    fraction > 0.4f -> Color(0xFF10B981)
+                    fraction > 0.2f -> Color(0xFFF59E0B)
+                    else -> MaterialTheme.colorScheme.error
+                },
+                trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+            )
+        }
+    }
+}
+
+@Composable
 private fun ScoreFeedbackCard(
     accuracy: Float,
     accuracyFormatted: String,
@@ -2090,7 +3512,10 @@ private fun ScoreFeedbackCard(
     modifier: Modifier = Modifier,
     challengeIndex: Int = 0,
     batchSize: Int = 0,
-    progressFraction: Float = 0f
+    progressFraction: Float = 0f,
+    isTimeAttack: Boolean = false,
+    timeAttackMissedCount: Int = 0,
+    timeAttackResponseWindowSeconds: Float = 1.5f
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -2112,7 +3537,7 @@ private fun ScoreFeedbackCard(
             ) {
                 Column {
                     Text(
-                        text = "Session Score",
+                        text = if (isTimeAttack) "Time Attack Score" else "Session Score",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2178,9 +3603,9 @@ private fun ScoreFeedbackCard(
                     modifier = Modifier.defaultMinSize(minWidth = 76.dp)
                 )
                 ScoreMetricTile(
-                    title = "Target",
-                    value = "≥ 90%",
-                    valueColor = Color(0xFF10B981),
+                    title = if (isTimeAttack) "Missed" else "Target",
+                    value = if (isTimeAttack) "$timeAttackMissedCount" else "≥ 90%",
+                    valueColor = if (isTimeAttack) Color(0xFFF59E0B) else Color(0xFF10B981),
                     modifier = Modifier.defaultMinSize(minWidth = 76.dp)
                 )
             }
@@ -2200,13 +3625,17 @@ private fun ScoreFeedbackCard(
             Spacer(modifier = Modifier.height(6.dp))
 
             // Level-up progress helper
-            val attemptsRemaining = (minAttempts - totalCount).coerceAtLeast(0)
-            val progressText = if (attemptsRemaining > 0) {
-                "$attemptsRemaining more attempt${if (attemptsRemaining > 1) "s" else ""} needed to evaluate promotion"
-            } else if (accuracy >= 90.0f) {
-                "Promotion threshold achieved! Level advances on next evaluation"
+            val progressText = if (isTimeAttack) {
+                "Time Attack: ${String.format(java.util.Locale.US, "%.1f", timeAttackResponseWindowSeconds)}s window • $totalCount of $batchSize complete"
             } else {
-                "Reach ≥ 90% accuracy over $minAttempts attempts to advance"
+                val attemptsRemaining = (minAttempts - totalCount).coerceAtLeast(0)
+                if (attemptsRemaining > 0) {
+                    "$attemptsRemaining more attempt${if (attemptsRemaining > 1) "s" else ""} needed to evaluate promotion"
+                } else if (accuracy >= 90.0f) {
+                    "Promotion threshold achieved! Level advances on next evaluation"
+                } else {
+                    "Reach ≥ 90% accuracy over $minAttempts attempts to advance"
+                }
             }
 
             Text(

@@ -7,14 +7,16 @@ import androidx.room.RoomDatabase
 import com.example.androidmorsetrainer.data.local.dao.CharacterStatsDao
 import com.example.androidmorsetrainer.data.local.dao.UserProfileDao
 import com.example.androidmorsetrainer.data.local.entity.CharacterStats
+import com.example.androidmorsetrainer.data.local.entity.TimeAttackReport
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
 
 @Database(
     entities = [
         UserProfile::class,
-        CharacterStats::class
+        CharacterStats::class,
+        TimeAttackReport::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class MorseDatabase : RoomDatabase() {
