@@ -23,22 +23,31 @@ android {
         applicationId = "uk.co.m7kqx.cwbootcamp"
         minSdk = 24
         targetSdk = 37
-        versionCode = 10
-        versionName = "1.0.9"
+        versionCode = 12
+        versionName = "1.1.0-RC1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
         create("release") {
-            properties.getProperty("storeFile")?.let { storeFilePath ->
-                val fileInRoot = rootProject.file(storeFilePath)
-                val fileInApp = file(storeFilePath)
-                storeFile = if (fileInRoot.exists() && !fileInApp.exists()) fileInRoot else fileInApp
+            val isCi = System.getenv("SIGNING_STORE_PASSWORD") != null
+
+            if (isCi) {
+                storeFile = file("keystore.jks")
+                storePassword = System.getenv("SIGNING_STORE_PASSWORD") ?: "Ca512ssie!"
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: "upload"
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: "Ca512ssie!"
+            } else {
+                properties.getProperty("storeFile")?.let { storeFilePath ->
+                    val fileInRoot = rootProject.file(storeFilePath)
+                    val fileInApp = file(storeFilePath)
+                    storeFile = if (fileInRoot.exists() && !fileInApp.exists()) fileInRoot else fileInApp
+                }
+                storePassword = properties.getProperty("storePassword") ?: "Ca512ssie!"
+                keyAlias = properties.getProperty("keyAlias") ?: "upload"
+                keyPassword = properties.getProperty("keyPassword") ?: "Ca512ssie!"
             }
-            storePassword = properties.getProperty("storePassword")
-            keyAlias = properties.getProperty("keyAlias")
-            keyPassword = properties.getProperty("keyPassword")
         }
     }
 
