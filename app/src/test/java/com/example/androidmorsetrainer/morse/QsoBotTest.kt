@@ -161,13 +161,13 @@ class QsoBotTest {
 
         // State 2: Initial Response
         assertEquals(
-            "LZ2BB DE M7KQX UR RST IS 599 5NN BK",
+            "M7KQX DE LZ2BB UR RST IS 599 5NN BK",
             bot.constructResponse(QsoState.InitialResponse)
         )
 
         // State 3: Info Exchange
         assertEquals(
-            "LZ2BB DE M7KQX QSL TNX NAME Boyan QTH Sofia BK",
+            "M7KQX DE LZ2BB QSL TNX NAME Boyan QTH Sofia BK",
             bot.constructResponse(QsoState.InfoExchange)
         )
 

@@ -159,14 +159,14 @@ class QsoSessionControllerTest {
             runCurrent()
             assertEquals(QsoState.InitialResponse, qsoManager.state.value)
             assertEquals(1, audioPlayer.history.size)
-            assertEquals("LZ2BB DE M7KQX UR RST IS 599 5NN BK", audioPlayer.history.last().text)
+            assertEquals("M7KQX DE LZ2BB UR RST IS 599 5NN BK", audioPlayer.history.last().text)
 
             // 2. User transmits signal report -> Bot transmits Info Exchange
             dspStream.emitInput("599")
             runCurrent()
             assertEquals(QsoState.InfoExchange, qsoManager.state.value)
             assertEquals(2, audioPlayer.history.size)
-            assertEquals("LZ2BB DE M7KQX QSL TNX NAME Boyan QTH Sofia BK", audioPlayer.history.last().text)
+            assertEquals("M7KQX DE LZ2BB QSL TNX NAME Boyan QTH Sofia BK", audioPlayer.history.last().text)
 
             // 3. User transmits info ack -> Bot transmits Sign-Off
             dspStream.emitInput("QSL FB")
@@ -219,7 +219,7 @@ class QsoSessionControllerTest {
             // State advances to InitialResponse and Bot transmits initial response
             assertEquals(QsoState.InitialResponse, qsoManager.state.value)
             assertEquals(1, audioPlayer.history.size)
-            assertEquals("LZ2BB DE M7KQX UR RST IS 599 5NN BK", audioPlayer.history.first().text)
+            assertEquals("M7KQX DE LZ2BB UR RST IS 599 5NN BK", audioPlayer.history.first().text)
         } finally {
             sessionJob.cancel()
         }

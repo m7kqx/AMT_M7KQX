@@ -199,15 +199,15 @@ class QsoBot(
             }
 
             is QsoState.ListenCQ -> {
-                "$botCall DE $userCall K"
+                "$userCall DE $botCall K"
             }
 
             is QsoState.InitialResponse -> {
-                "$botCall DE $userCall UR RST IS 599 5NN BK"
+                "$userCall DE $botCall UR RST IS 599 5NN BK"
             }
 
             is QsoState.InfoExchange -> {
-                "$botCall DE $userCall QSL TNX NAME $name QTH $qth BK"
+                "$userCall DE $botCall QSL TNX NAME $name QTH $qth BK"
             }
 
             is QsoState.SignOff -> {

@@ -19,8 +19,10 @@ interface DspCharacterStream {
     val stream: Flow<String> get() = characterFlow
     val toneActivityFlow: Flow<Unit> get() = emptyFlow()
     val isListening: StateFlow<Boolean> get() = MutableStateFlow(true)
+    val isProcessing: StateFlow<Boolean> get() = MutableStateFlow(false)
     fun pauseListening() {}
     fun resumeListening() {}
+    suspend fun onSilenceTimeout() {}
 }
 
 /**
@@ -102,6 +104,7 @@ class QsoSessionController(
             silenceJob?.cancel()
             silenceJob = launch {
                 delay(delayMs)
+                dspStream.onSilenceTimeout()
                 qsoManager.onSilenceTimeout()
             }
         }

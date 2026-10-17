@@ -144,6 +144,9 @@ class QsoViewModel(
     // 5. Expose microphone half-duplex mute status to the UI
     val isMicMuted: StateFlow<Boolean>
 
+    // 6. Expose batch DSP audio processing state to the UI
+    val isAudioProcessing: StateFlow<Boolean> = dspStream.isProcessing
+
     /**
      * Passes the user's manual noise floor / squelch threshold adjustment down to GoertzelDspStream.
      */
@@ -178,10 +181,16 @@ class QsoViewModel(
             }
         }
 
-        // Monitor real-time decoded words from DSP stream to log to console
+        // Monitor batch decoded transmissions from DSP stream to log to console
         viewModelScope.launch {
             dspStream.characterFlow.collect { decodedText ->
-                addTranscriptEntry("DSP Decoded: $decodedText")
+                val trimmed = decodedText.trim()
+                if (trimmed.isNotEmpty()) {
+                    val entry = "TX (You): $trimmed"
+                    if (_transcript.value.lastOrNull() != entry) {
+                        addTranscriptEntry(entry)
+                    }
+                }
             }
         }
 

@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +43,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
+import android.app.Activity
+import android.content.ContextWrapper
+import android.view.WindowManager
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -49,6 +54,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -84,6 +90,15 @@ fun QsoPracticeScreen(
 ) {
     val context = LocalContext.current
 
+    // 1. Prevent screen sleep while QSO practice screen is active
+    DisposableEffect(Unit) {
+        val activity = context as? Activity ?: (context as? ContextWrapper)?.baseContext as? Activity
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     // Audio permission state management
     var hasAudioPermission by remember {
         mutableStateOf(
@@ -109,6 +124,7 @@ fun QsoPracticeScreen(
     val transcript by viewModel.transcript.collectAsStateWithLifecycle()
     val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
     val isMicMuted by viewModel.isMicMuted.collectAsStateWithLifecycle()
+    val isAudioProcessing by viewModel.isAudioProcessing.collectAsStateWithLifecycle()
 
     val listState = rememberLazyListState()
     val scrollState = rememberScrollState()
@@ -133,8 +149,11 @@ fun QsoPracticeScreen(
             onThresholdChanged = { viewModel.updateNoiseFloor(it) }
         )
 
-        // 2. Strict Half-Duplex Microphone Status Banner
-        MicrophoneHalfDuplexBanner(isMuted = isMicMuted)
+        // 2. Strict Half-Duplex Microphone & Batch Audio Processing Status Banner
+        MicrophoneHalfDuplexBanner(
+            isMuted = isMicMuted,
+            isProcessing = isAudioProcessing
+        )
 
         // 3. Simulated Operator Header
         OperatorHeaderCard(profile = activeProfile)
@@ -189,6 +208,7 @@ fun QsoPracticeScreen(
         // 7. Scrolling Exchange Transcription Waterfall / Console
         ConsoleTranscriptionCard(
             transcript = transcript,
+            isProcessing = isAudioProcessing,
             listState = listState,
             modifier = Modifier
                 .fillMaxWidth()
@@ -233,15 +253,25 @@ fun QsoPracticeScreen(
 /**
  * Prominent banner indicating half-duplex microphone status:
  * - MUTED (BOT TX): Audio capture paused during simulated bot audio transmission to prevent acoustic self-decoding.
- * - LISTENING (USER TX): Microphone active and DSP Goertzel decoder actively listening for user CW.
+ * - PROCESSING AUDIO: Batch DSP analyzing recorded audio buffer with contextual tuning.
+ * - RECORDING (USER TX): Microphone active, streaming raw PCM audio and monitoring tone activity.
  */
 @Composable
 fun MicrophoneHalfDuplexBanner(
     isMuted: Boolean,
+    isProcessing: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val bannerColor = if (isMuted) Color(0xFFD32F2F) else Color(0xFF2E7D32)
-    val containerBg = if (isMuted) Color(0xFFFFEBEE) else Color(0xFFE8F5E9)
+    val bannerColor = when {
+        isMuted -> Color(0xFFD32F2F)
+        isProcessing -> Color(0xFFFB8C00)
+        else -> Color(0xFF2E7D32)
+    }
+    val containerBg = when {
+        isMuted -> Color(0xFFFFEBEE)
+        isProcessing -> Color(0xFFFFF3E0)
+        else -> Color(0xFFE8F5E9)
+    }
 
     Card(
         modifier = modifier
@@ -264,27 +294,43 @@ fun MicrophoneHalfDuplexBanner(
                     .background(bannerColor),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                    contentDescription = if (isMuted) "Microphone Muted" else "Microphone Active",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
-                )
+                if (isProcessing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.5.dp,
+                        color = Color.White
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                        contentDescription = if (isMuted) "Microphone Muted" else "Microphone Active",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (isMuted) "MICROPHONE MUTED (BOT TX)" else "MICROPHONE ACTIVE (LISTENING)",
+                    text = when {
+                        isMuted -> "MICROPHONE MUTED (BOT TRANSMITTING)"
+                        isProcessing -> "PROCESSING AUDIO..."
+                        else -> "MICROPHONE ACTIVE (RECORDING...)"
+                    },
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace,
                     color = bannerColor
                 )
                 Text(
-                    text = if (isMuted)
-                        "Half-duplex lock: Audio input paused during bot playback to prevent self-decoding."
-                    else
-                        "Half-duplex active: Goertzel DSP listening for your CW transmission.",
+                    text = when {
+                        isMuted ->
+                            "Half-duplex lock: Audio input paused during bot playback to prevent self-decoding."
+                        isProcessing ->
+                            "Batch DSP analyzing recorded audio with contextual noise floor & WPM tuning..."
+                        else ->
+                            "Half-duplex active: Recording raw audio and monitoring tone activity."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     fontSize = 11.sp,
                     color = Color.DarkGray
@@ -661,6 +707,7 @@ fun QsoSummaryCard(
 @Composable
 private fun ConsoleTranscriptionCard(
     transcript: List<String>,
+    isProcessing: Boolean = false,
     listState: androidx.compose.foundation.lazy.LazyListState,
     modifier: Modifier = Modifier
 ) {
@@ -681,13 +728,32 @@ private fun ConsoleTranscriptionCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "QSO TRANSCRIPTION CONSOLE",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.LightGray.copy(alpha = 0.7f)
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "QSO TRANSCRIPTION CONSOLE",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.LightGray.copy(alpha = 0.7f)
+                    )
+                    if (isProcessing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 2.dp,
+                            color = Color(0xFFFB8C00)
+                        )
+                        Text(
+                            text = "DECODING...",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFB8C00)
+                        )
+                    }
+                }
 
                 Text(
                     text = "${transcript.size} entries",
@@ -704,12 +770,31 @@ private fun ConsoleTranscriptionCard(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "Awaiting Morse transmissions...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontFamily = FontFamily.Monospace,
-                        color = Color.Gray
-                    )
+                    if (isProcessing) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = Color(0xFFFB8C00)
+                            )
+                            Text(
+                                text = "Processing Audio...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontFamily = FontFamily.Monospace,
+                                color = Color(0xFFFFB74D)
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "Awaiting Morse transmissions...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontFamily = FontFamily.Monospace,
+                            color = Color.Gray
+                        )
+                    }
                 }
             } else {
                 LazyColumn(
@@ -737,6 +822,37 @@ private fun ConsoleTranscriptionCard(
                             fontFamily = FontFamily.Monospace,
                             color = textColor
                         )
+                    }
+
+                    if (isProcessing) {
+                        item {
+                            Surface(
+                                color = Color(0xFF261C00),
+                                shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(1.dp, Color(0xFFFB8C00).copy(alpha = 0.5f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(12.dp),
+                                        strokeWidth = 1.5.dp,
+                                        color = Color(0xFFFB8C00)
+                                    )
+                                    Text(
+                                        text = "Processing Audio...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = Color(0xFFFFB74D)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -865,48 +981,6 @@ fun CalibrationTelemetryOverlay(
                     color = activeColor,
                     trackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
                 )
-            }
-
-            // Real-Time Morse Element Buffer (in-progress symbol)
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (telemetry.currentElementBuffer.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                )
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "RAW MORSE BUFFER",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
-                    Text(
-                        text = if (telemetry.currentElementBuffer.isNotEmpty()) {
-                            "[ ${telemetry.currentElementBuffer} ]"
-                        } else {
-                            "—"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = if (telemetry.currentElementBuffer.isNotEmpty()) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                        }
-                    )
-                }
             }
 
             // Key Timing Metrics: Last Tone, Last Silence, Dit Baseline
