@@ -318,7 +318,7 @@ class SendViewModelTest {
     }
 
     @Test
-    fun verifyKeyedCharacter_completesBatchAndPromotesKochLevelOnLatestCharacterMastery() = runTest {
+    fun verifyKeyedCharacter_completesBatchAndPromotesKochLevelOnLatestCharacterMastery() = runTest(testDispatcher) {
         // v1.7 logic: Level 1 characters are "K" and "M". Latest introduced is "M".
         // Promotion criteria: attempts >= 5 and accuracy >= 70.0% on latest character "M".
         profileRepository.saveCharacterStat(

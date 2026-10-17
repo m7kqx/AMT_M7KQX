@@ -125,6 +125,7 @@ fun QsoPracticeScreen(
     val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
     val isMicMuted by viewModel.isMicMuted.collectAsStateWithLifecycle()
     val isAudioProcessing by viewModel.isAudioProcessing.collectAsStateWithLifecycle()
+    val statusText by viewModel.statusText.collectAsStateWithLifecycle()
 
     val listState = rememberLazyListState()
     val scrollState = rememberScrollState()
@@ -152,7 +153,8 @@ fun QsoPracticeScreen(
         // 2. Strict Half-Duplex Microphone & Batch Audio Processing Status Banner
         MicrophoneHalfDuplexBanner(
             isMuted = isMicMuted,
-            isProcessing = isAudioProcessing
+            isProcessing = isAudioProcessing,
+            statusText = statusText
         )
 
         // 3. Simulated Operator Header
@@ -254,12 +256,13 @@ fun QsoPracticeScreen(
  * Prominent banner indicating half-duplex microphone status:
  * - MUTED (BOT TX): Audio capture paused during simulated bot audio transmission to prevent acoustic self-decoding.
  * - PROCESSING AUDIO: Batch DSP analyzing recorded audio buffer with contextual tuning.
- * - RECORDING (USER TX): Microphone active, streaming raw PCM audio and monitoring tone activity.
+ * - LISTENING: Microphone active, streaming raw PCM audio and monitoring voice activity (VAD).
  */
 @Composable
 fun MicrophoneHalfDuplexBanner(
     isMuted: Boolean,
     isProcessing: Boolean = false,
+    statusText: String = "",
     modifier: Modifier = Modifier
 ) {
     val bannerColor = when {
@@ -315,7 +318,8 @@ fun MicrophoneHalfDuplexBanner(
                     text = when {
                         isMuted -> "MICROPHONE MUTED (BOT TRANSMITTING)"
                         isProcessing -> "PROCESSING AUDIO..."
-                        else -> "MICROPHONE ACTIVE (RECORDING...)"
+                        statusText.isNotBlank() -> statusText.uppercase()
+                        else -> "LISTENING TO YOUR TRANSMISSION..."
                     },
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Black,
@@ -327,9 +331,9 @@ fun MicrophoneHalfDuplexBanner(
                         isMuted ->
                             "Half-duplex lock: Audio input paused during bot playback to prevent self-decoding."
                         isProcessing ->
-                            "Batch DSP analyzing recorded audio with contextual noise floor & WPM tuning..."
+                            "Batch DSP analyzing entire recorded transmission with contextual tuning..."
                         else ->
-                            "Half-duplex active: Recording raw audio and monitoring tone activity."
+                            "Batch recording: Streaming raw audio and monitoring key activity (VAD)."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     fontSize = 11.sp,
@@ -789,7 +793,7 @@ private fun ConsoleTranscriptionCard(
                         }
                     } else {
                         Text(
-                            text = "Awaiting Morse transmissions...",
+                            text = "Listening to your transmission...",
                             style = MaterialTheme.typography.bodyMedium,
                             fontFamily = FontFamily.Monospace,
                             color = Color.Gray

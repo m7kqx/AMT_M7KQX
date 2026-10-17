@@ -1,5 +1,6 @@
 package com.example.androidmorsetrainer.morse
 
+import com.example.androidmorsetrainer.audio.DspTelemetry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
@@ -12,7 +13,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 
 /**
- * Interface representing the real-time stream of characters/words decoded by Goertzel DSP.
+ * Interface representing the stream of characters/words decoded by Goertzel DSP.
  */
 interface DspCharacterStream {
     val characterFlow: Flow<String>
@@ -20,9 +21,13 @@ interface DspCharacterStream {
     val toneActivityFlow: Flow<Unit> get() = emptyFlow()
     val isListening: StateFlow<Boolean> get() = MutableStateFlow(true)
     val isProcessing: StateFlow<Boolean> get() = MutableStateFlow(false)
+    val telemetry: StateFlow<DspTelemetry> get() = MutableStateFlow(DspTelemetry())
+    fun updateNoiseFloor(threshold: Float) {}
     fun pauseListening() {}
     fun resumeListening() {}
-    suspend fun onSilenceTimeout() {}
+    suspend fun onSilenceTimeout(): String = ""
+    fun start() {}
+    fun stop() {}
 }
 
 /**

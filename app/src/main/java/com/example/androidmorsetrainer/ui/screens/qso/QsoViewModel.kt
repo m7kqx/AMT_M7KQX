@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.androidmorsetrainer.MorseTrainerApplication
+import com.example.androidmorsetrainer.audio.BatchQsoAudioProcessor
 import com.example.androidmorsetrainer.audio.DspTelemetry
 import com.example.androidmorsetrainer.audio.GoertzelDspStream
 import com.example.androidmorsetrainer.audio.MorseAudioGenerator
@@ -73,13 +74,13 @@ class StubMorseAudioPlayer(
 /**
  * Android ViewModel managing the offline Morse code QSO simulator session.
  *
- * Integrates [GoertzelDspStream] for real-time microphone Goertzel audio decoding
+ * Integrates [BatchQsoAudioProcessor] for strict 2-phase batch Goertzel audio decoding
  * and [SineWaveMorsePlayer] for strict 1:3:7 ITU AudioTrack sine wave audio synthesis.
  */
 class QsoViewModel(
     val qsoManager: QsoManager = QsoManager(),
     val qsoBot: QsoBot = QsoBot(userCallsign = "M7KQX"),
-    val dspStream: DspCharacterStream = GoertzelDspStream(MorseDSPManager()),
+    val dspStream: DspCharacterStream = BatchQsoAudioProcessor(MorseDSPManager()),
     val audioPlayer: MorseAudioPlayer = SineWaveMorsePlayer(MorseAudioGenerator())
 ) : ViewModel() {
 
@@ -87,10 +88,10 @@ class QsoViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = (this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as MorseTrainerApplication)
-                val dspStream = GoertzelDspStream(app.container.morseDSPManager)
+                val dspProcessor = BatchQsoAudioProcessor(app.container.morseDSPManager)
                 val audioPlayer = SineWaveMorsePlayer(app.container.morseAudioGenerator)
                 QsoViewModel(
-                    dspStream = dspStream,
+                    dspStream = dspProcessor,
                     audioPlayer = audioPlayer
                 )
             }
@@ -132,11 +133,7 @@ class QsoViewModel(
     val transcript: StateFlow<List<String>> = _transcript.asStateFlow()
 
     // 4. Expose real-time DSP telemetry to the UI
-    val telemetry: StateFlow<DspTelemetry> = if (dspStream is GoertzelDspStream) {
-        dspStream.telemetry
-    } else {
-        MutableStateFlow(DspTelemetry())
-    }
+    val telemetry: StateFlow<DspTelemetry> = dspStream.telemetry
 
     val sessionController: QsoSessionController
     private var sessionJob: Job? = null
@@ -147,13 +144,18 @@ class QsoViewModel(
     // 6. Expose batch DSP audio processing state to the UI
     val isAudioProcessing: StateFlow<Boolean> = dspStream.isProcessing
 
+    // 7. Status text: "Listening to your transmission..." -> "Processing audio..."
+    val statusText: StateFlow<String> = if (dspStream is BatchQsoAudioProcessor) {
+        dspStream.statusText
+    } else {
+        MutableStateFlow("Listening to your transmission...")
+    }
+
     /**
-     * Passes the user's manual noise floor / squelch threshold adjustment down to GoertzelDspStream.
+     * Passes the user's manual noise floor / squelch threshold adjustment down to dspStream.
      */
     fun updateNoiseFloor(threshold: Float) {
-        if (dspStream is GoertzelDspStream) {
-            dspStream.updateNoiseFloor(threshold)
-        }
+        dspStream.updateNoiseFloor(threshold)
     }
 
     init {
@@ -220,9 +222,7 @@ class QsoViewModel(
         _activeProfile.value = newProfile
         addTranscriptEntry("=== New QSO with ${newProfile.callsign} (${newProfile.name}, ${newProfile.qth}) ===")
 
-        if (dspStream is GoertzelDspStream) {
-            dspStream.start()
-        }
+        dspStream.start()
 
         sessionJob = viewModelScope.launch {
             sessionController.startSession(newProfile)
@@ -263,9 +263,7 @@ class QsoViewModel(
         sessionJob = null
 
         // Explicitly release hardware resources
-        if (dspStream is GoertzelDspStream) {
-            dspStream.stop()
-        }
+        dspStream.stop()
         if (audioPlayer is SineWaveMorsePlayer) {
             audioPlayer.release()
         }

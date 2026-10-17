@@ -14,13 +14,10 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class GoertzelDspStreamTest {
@@ -192,57 +189,5 @@ class GoertzelDspStreamTest {
 
         dspStream.pauseListening()
         assertEquals("", dspStream.telemetry.value.currentElementBuffer)
-    }
-
-    @Test
-    fun testRecordAudioAndProcessBatchEmitsDecodedString() = runTest(testDispatcher) {
-        val collected = mutableListOf<String>()
-        val job = launch {
-            dspStream.characterFlow.collect { collected.add(it) }
-        }
-        advanceUntilIdle()
-
-        val audioGen = MorseAudioGenerator(sampleRate = 44100, frequencyHz = 700, wpm = 20)
-        val kSamples = audioGen.generateMorsePatternBuffer(
-            pattern = "-.-",
-            speedWpm = 20,
-            initialSilenceMs = 50L
-        )
-        val trailingSilence = ShortArray(8820)
-        val combined = ShortArray(kSamples.size + trailingSilence.size)
-        System.arraycopy(kSamples, 0, combined, 0, kSamples.size)
-        System.arraycopy(trailingSilence, 0, combined, kSamples.size, trailingSilence.size)
-
-        val bytes = ByteArray(combined.size * 2)
-        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(combined)
-
-        dspStream.recordAudioForTest(bytes)
-        val decoded = dspStream.processBatchAudio()
-        advanceUntilIdle()
-
-        assertEquals("K", decoded)
-        assertEquals(1, collected.size)
-        assertEquals("K", collected.first())
-        assertFalse(dspStream.isProcessing.value)
-
-        job.cancel()
-    }
-
-    @Test
-    fun testProcessBatchAudioWithEmptyBufferReturnsEmptyAndDoesNotEmit() = runTest(testDispatcher) {
-        val collected = mutableListOf<String>()
-        val job = launch {
-            dspStream.characterFlow.collect { collected.add(it) }
-        }
-        advanceUntilIdle()
-
-        val result = dspStream.processBatchAudio()
-        advanceUntilIdle()
-
-        assertEquals("", result)
-        assertTrue(collected.isEmpty())
-        assertFalse(dspStream.isProcessing.value)
-
-        job.cancel()
     }
 }

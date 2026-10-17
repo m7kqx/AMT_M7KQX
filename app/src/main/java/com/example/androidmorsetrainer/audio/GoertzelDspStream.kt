@@ -16,27 +16,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 /**
- * Batch DSP implementation of [DspCharacterStream].
- *
- * Real-Time Phase (Recording & VAD):
- * - Reads raw PCM audio continuously from AudioRecord into a [ByteArrayOutputStream].
- * - Computes live Goertzel audio magnitude to act as Voice Activity Detection (VAD)
- *   and emit [toneActivityFlow] to reset the 5-second silence timeout.
- * - Does NOT decode characters in real-time.
- *
- * Batch Processing Phase (Decoding):
- * - On 5-second silence timeout, stops AudioRecord and runs [BatchAudioProcessor] as fast
- *   as the CPU allows on [Dispatchers.Default].
- * - Calculates definitive noise floor and locked WPM average contextually across the entire recording.
- * - Emits the final complete translated String to [characterFlow] in a single event.
+ * Real-time Goertzel DSP stream implementing [DspCharacterStream].
+ * Used for live on-the-fly Morse decoding (e.g. in live Decode mode).
+ * Continuously parses dits, dahs, character spaces, and word boundaries in real-time.
  */
 open class GoertzelDspStream(
     val dspManager: MorseDSPManager = MorseDSPManager(),
@@ -66,18 +51,13 @@ open class GoertzelDspStream(
     var isListeningPaused: Boolean = false
         private set
 
-    private val pcmOutputStream = ByteArrayOutputStream()
-
-    @Volatile
-    private var hasAudioActivityInCurrentWindow: Boolean = false
-
     private val _telemetry = MutableStateFlow(
         DspTelemetry(
             noiseFloorThreshold = dspManager.squelchThreshold.toFloat(),
             currentDitAverageMs = timingEngine.rollingDitMs.toFloat()
         )
     )
-    val telemetry: StateFlow<DspTelemetry> = _telemetry.asStateFlow()
+    override val telemetry: StateFlow<DspTelemetry> = _telemetry.asStateFlow()
 
     private val currentSymbol = StringBuilder()
     private val currentWord = StringBuilder()
@@ -92,7 +72,6 @@ open class GoertzelDspStream(
 
     private var lastToneEndTimeMs: Long = 0L
     private var listeningJob: Job? = null
-    private var rawAudioJob: Job? = null
     private var telemetryJob: Job? = null
     private var silenceWatchdogJob: Job? = null
 
@@ -107,10 +86,6 @@ open class GoertzelDspStream(
         isListeningPaused = true
         _isListening.value = false
         dspManager.isDecodingActive = false
-        synchronized(pcmOutputStream) {
-            pcmOutputStream.reset()
-        }
-        hasAudioActivityInCurrentWindow = false
         silenceWatchdogJob?.cancel()
         silenceWatchdogJob = null
         lastToneEndTimeMs = 0L
@@ -128,44 +103,25 @@ open class GoertzelDspStream(
         isListeningPaused = false
         _isListening.value = true
         dspManager.isDecodingActive = true
-        synchronized(pcmOutputStream) {
-            pcmOutputStream.reset()
-        }
-        hasAudioActivityInCurrentWindow = false
         lastToneEndTimeMs = 0L
         dspManager.startListening()
     }
 
     /**
-     * Starts microphone audio capture, PCM recording buffer, VAD, and throttled telemetry updates.
+     * Starts microphone audio capture, VAD, and throttled telemetry updates.
      */
     @Synchronized
-    open fun start() {
+    override fun start() {
         if (listeningJob?.isActive == true) return
 
         dspManager.startListening()
 
-        // 1. Raw PCM audio capture loop: writes samples into ByteArrayOutputStream continuously
-        rawAudioJob?.cancel()
-        rawAudioJob = scope.launch(defaultDispatcher) {
-            val byteBuf = ByteBuffer.allocate(dspManager.blockSize * 2).order(ByteOrder.LITTLE_ENDIAN)
-            dspManager.rawAudioFlow.collect { buffer ->
-                if (isListeningPaused || _isProcessing.value) return@collect
-                byteBuf.clear()
-                byteBuf.asShortBuffer().put(buffer)
-                synchronized(pcmOutputStream) {
-                    pcmOutputStream.write(byteBuf.array(), 0, buffer.size * 2)
-                }
-            }
-        }
-
-        // 2. VAD: Listen for tone events from Goertzel DSP solely to detect Voice/Key Activity
+        // 1. Listen for tone events from Goertzel DSP in real-time
         listeningJob = scope.launch(defaultDispatcher) {
             dspManager.toneEvents.collect { event ->
-                if (isListeningPaused || _isProcessing.value) return@collect
+                if (isListeningPaused) return@collect
                 if (event.isTonePresent) {
                     _toneActivityFlow.tryEmit(Unit)
-                    hasAudioActivityInCurrentWindow = true
                     onKeyToneStarted(event.timestampMs)
                 } else {
                     onKeyToneEnded(event.durationMs, event.timestampMs)
@@ -173,7 +129,7 @@ open class GoertzelDspStream(
             }
         }
 
-        // 3. Throttled telemetry updates for live magnitude meter and threshold adjustment (<= 16.6 FPS)
+        // 2. Throttled telemetry updates for live magnitude meter and threshold adjustment (<= 16.6 FPS)
         telemetryJob?.cancel()
         telemetryJob = scope.launch(defaultDispatcher) {
             var lastEmittedTime = 0L
@@ -187,67 +143,8 @@ open class GoertzelDspStream(
         }
     }
 
-    /**
-     * Triggered when the 5-second silence timeout occurs.
-     * Executes the Batch Processing Phase on [Dispatchers.Default] without blocking the Main thread.
-     */
-    override suspend fun onSilenceTimeout() {
-        processBatchAudio()
-    }
-
-    /**
-     * Completely decodes the recorded raw PCM audio buffer using [BatchAudioProcessor],
-     * establishes definitive noise floor and locked WPM, and emits the complete string.
-     */
-    open suspend fun processBatchAudio(): String = withContext(defaultDispatcher) {
-        silenceWatchdogJob?.cancel()
-        silenceWatchdogJob = null
-
-        val audioBytes = synchronized(pcmOutputStream) {
-            val bytes = pcmOutputStream.toByteArray()
-            pcmOutputStream.reset()
-            bytes
-        }
-
-        if (audioBytes.size < dspManager.blockSize * 2) {
-            return@withContext ""
-        }
-
-        _isProcessing.value = true
-        try {
-            // Immediately stop AudioRecord while running batch DSP
-            dspManager.stopListening()
-
-            val processor = BatchAudioProcessor(
-                sampleRate = dspManager.sampleRate,
-                targetFrequencyHz = dspManager.targetFrequencyHz,
-                blockSize = dspManager.blockSize,
-                manualNoiseFloorThreshold = dspManager.squelchThreshold.toFloat()
-            )
-
-            val decodedText = processor.process(audioBytes)
-            if (decodedText.isNotBlank()) {
-                Log.d(TAG, "Batch DSP decoded complete transmission: '$decodedText'")
-                _characterFlow.tryEmit(decodedText)
-            }
-            decodedText
-        } finally {
-            _isProcessing.value = false
-            hasAudioActivityInCurrentWindow = false
-            if (!isListeningPaused) {
-                dspManager.startListening()
-            }
-        }
-    }
-
-    /**
-     * Records simulated or raw PCM audio bytes for testing.
-     */
-    fun recordAudioForTest(bytes: ByteArray) {
-        synchronized(pcmOutputStream) {
-            pcmOutputStream.write(bytes)
-        }
-        hasAudioActivityInCurrentWindow = true
+    override suspend fun onSilenceTimeout(): String {
+        return ""
     }
 
     /**
@@ -270,7 +167,7 @@ open class GoertzelDspStream(
     /**
      * Updates the Goertzel squelch threshold in real-time.
      */
-    open fun updateNoiseFloor(threshold: Float) {
+    override fun updateNoiseFloor(threshold: Float) {
         val clamped = threshold.coerceIn(
             MorseDSPManager.MIN_SQUELCH_MAGNITUDE.toFloat(),
             MorseDSPManager.MAX_SQUELCH_MAGNITUDE.toFloat()
@@ -280,7 +177,7 @@ open class GoertzelDspStream(
     }
 
     /**
-     * Key-down handler for VAD and legacy real-time element tracking.
+     * Key-down handler for real-time element tracking.
      */
     open fun onKeyToneStarted(timestampMs: Long = System.currentTimeMillis()) {
         silenceWatchdogJob?.cancel()
@@ -301,7 +198,7 @@ open class GoertzelDspStream(
     }
 
     /**
-     * Key-up handler for VAD and legacy real-time element tracking.
+     * Key-up handler for real-time element tracking.
      */
     open fun onKeyToneEnded(durationMs: Long, timestampMs: Long = System.currentTimeMillis()) {
         if (durationMs < DynamicTimingEngine.MIN_VALID_PULSE_MS) return
@@ -367,11 +264,9 @@ open class GoertzelDspStream(
      * Stops DSP tone processing and releases AudioRecord hardware resources.
      */
     @Synchronized
-    open fun stop() {
+    override fun stop() {
         telemetryJob?.cancel()
         telemetryJob = null
-        rawAudioJob?.cancel()
-        rawAudioJob = null
         silenceWatchdogJob?.cancel()
         silenceWatchdogJob = null
         listeningJob?.cancel()
@@ -381,31 +276,15 @@ open class GoertzelDspStream(
             currentSymbol.clear()
         }
         currentWord.clear()
-        synchronized(pcmOutputStream) {
-            pcmOutputStream.reset()
-        }
-        lastToneEndTimeMs = 0L
         updateTelemetry()
         Log.d(TAG, "GoertzelDspStream stopped and microphone capture released")
     }
 
     /**
-     * Allows manual injection of Morse tokens into the stream for testing or simulation.
+     * Manually emits a decoded text element (for testing or debugging).
      */
-    open fun emitManual(input: String) {
-        if (isListeningPaused) return
-        val trimmed = input.trim()
-        if (trimmed.isNotEmpty()) {
-            _toneActivityFlow.tryEmit(Unit)
-            _characterFlow.tryEmit(trimmed)
-        }
-    }
-
-    /**
-     * Manually updates telemetry values (convenient for testing).
-     */
-    fun setTelemetryForTest(telemetryData: DspTelemetry) {
-        _telemetry.value = telemetryData
+    fun emitManual(text: String) {
+        _characterFlow.tryEmit(text)
     }
 
     fun getCurrentSymbol(): String = synchronized(currentSymbol) { currentSymbol.toString() }
