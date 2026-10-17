@@ -42,8 +42,8 @@ class QsoStateMachineTest {
         assertEquals(QsoState.InfoExchange, qsoManager.state.value)
         assertEquals("599", qsoManager.remoteReport)
 
-        // 4. User transmits exchange acknowledgement "QSL" -> State 4 (Sign Off)
-        qsoManager.processInput("QSL TNX")
+        // 4. User transmits exchange acknowledgement "QSL FB" -> State 4 (Sign Off)
+        qsoManager.processInput("QSL FB")
         assertEquals(QsoState.SignOff, qsoManager.state.value)
 
         // 5. User transmits sign-off acknowledgement "73" -> State 5 (Dit Dit Finale)
@@ -104,8 +104,8 @@ class QsoStateMachineTest {
         }
         runCurrent()
 
-        // Send non-report input
-        qsoManager.processInput("HELLO THERE")
+        // Send non-report input ending in K (or trigger via silence timeout)
+        qsoManager.processInput("HELLO THERE K")
         runCurrent()
 
         // Stays in State 2 and emits AGN AGN?
@@ -132,15 +132,15 @@ class QsoStateMachineTest {
         }
         runCurrent()
 
-        // Send invalid ack
-        qsoManager.processInput("RANDOM NOISE")
+        // Send invalid ack ending in K
+        qsoManager.processInput("RANDOM NOISE K")
         runCurrent()
 
         assertEquals(QsoState.InfoExchange, qsoManager.state.value)
         assertEquals(1, emittedErrors.size)
 
-        // Now send valid ack
-        qsoManager.processInput("TNX")
+        // Now send valid ack with keyword FB
+        qsoManager.processInput("FB")
         assertEquals(QsoState.SignOff, qsoManager.state.value)
 
         job.cancel()
@@ -161,7 +161,7 @@ class QsoStateMachineTest {
     fun testDitDitFinaleTriggersDitDitFlow() = runTest {
         qsoManager.processInput("CQ CQ DE M7KQX K")
         qsoManager.processInput("599")
-        qsoManager.processInput("QSL")
+        qsoManager.processInput("QSL FB")
         qsoManager.processInput("73")
         assertEquals(QsoState.DitDitFinale, qsoManager.state.value)
 
@@ -183,7 +183,7 @@ class QsoStateMachineTest {
     fun testSilenceTimeoutInState5CompletesQso() {
         qsoManager.processInput("CQ CQ DE M7KQX K")
         qsoManager.processInput("599")
-        qsoManager.processInput("QSL")
+        qsoManager.processInput("QSL FB")
         qsoManager.processInput("73")
         assertEquals(QsoState.DitDitFinale, qsoManager.state.value)
 
@@ -196,7 +196,7 @@ class QsoStateMachineTest {
     fun testResetClearsStateAndBuffers() {
         qsoManager.processInput("CQ CQ DE M7KQX K")
         qsoManager.processInput("599")
-        qsoManager.processInput("QSL")
+        qsoManager.processInput("QSL FB")
         qsoManager.processInput("73")
         qsoManager.completeQso()
         assertTrue(qsoManager.state.value is QsoState.Summary)
@@ -206,5 +206,69 @@ class QsoStateMachineTest {
         assertEquals("M7KQX", qsoManager.userCallsign)
         assertNull(qsoManager.remoteReport)
         assertEquals("", qsoManager.getCqBufferContent())
+    }
+
+    @Test
+    fun testNoiseFloorFailureTriggeringAgnAgnInState1() = runTest {
+        val emittedErrors = mutableListOf<String>()
+        val job = launch {
+            qsoManager.errorRecoveryFlow.collect { emittedErrors.add(it) }
+        }
+        runCurrent()
+
+        // Noise floor failure (5+ repeating dits/dahs)
+        qsoManager.processInput("EEEEE")
+        qsoManager.onSilenceTimeout()
+        runCurrent()
+
+        assertEquals(1, emittedErrors.size)
+        assertEquals("AGN AGN?", emittedErrors.first())
+        assertEquals(QsoState.ListenCQ, qsoManager.state.value)
+
+        job.cancel()
+    }
+
+    @Test
+    fun testSilenceTimeoutInState2WithGibberishTriggersErrorRecovery() = runTest {
+        qsoManager.processInput("CQ CQ DE M7KQX K")
+        assertEquals(QsoState.InitialResponse, qsoManager.state.value)
+
+        val emittedErrors = mutableListOf<String>()
+        val job = launch {
+            qsoManager.errorRecoveryFlow.collect { emittedErrors.add(it) }
+        }
+        runCurrent()
+
+        // User transmits non-report input without K
+        qsoManager.processInput("NO REPORT HERE")
+        runCurrent()
+        assertEquals(0, emittedErrors.size)
+
+        // 5s silence timeout fires
+        qsoManager.onSilenceTimeout()
+        runCurrent()
+
+        assertEquals(1, emittedErrors.size)
+        assertEquals("AGN AGN?", emittedErrors.first())
+        assertEquals(QsoState.InitialResponse, qsoManager.state.value)
+
+        job.cancel()
+    }
+
+    @Test
+    fun testKeywordsAcrossStates() {
+        // State 2: RST keyword
+        qsoManager.processInput("CQ CQ DE M7KQX K")
+        assertEquals(QsoState.InitialResponse, qsoManager.state.value)
+        qsoManager.processInput("UR RST 579")
+        assertEquals(QsoState.InfoExchange, qsoManager.state.value)
+
+        // State 3: NAME keyword
+        qsoManager.processInput("NAME BOYAN")
+        assertEquals(QsoState.SignOff, qsoManager.state.value)
+
+        // State 4: GB keyword
+        qsoManager.processInput("GB OM")
+        assertEquals(QsoState.DitDitFinale, qsoManager.state.value)
     }
 }

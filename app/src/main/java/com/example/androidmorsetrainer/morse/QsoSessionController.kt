@@ -194,6 +194,7 @@ class QsoSessionController(
             is QsoState.ListenCQ -> false
             is QsoState.DitDitFinale -> false
             is QsoState.Summary -> false
+            is QsoState.Error -> false
             is QsoState.LoggingContact -> false
             is QsoState.TransmittingCQ -> false
             is QsoState.Idle -> false

@@ -99,7 +99,7 @@ class QsoViewModelTest {
         assertEquals(QsoState.InfoExchange, viewModel.qsoState.value)
 
         // Send info ACK
-        viewModel.simulateInput("QSL")
+        viewModel.simulateInput("QSL FB")
         advanceUntilIdle()
         assertEquals(QsoState.SignOff, viewModel.qsoState.value)
     }

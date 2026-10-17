@@ -105,6 +105,7 @@ class QsoViewModel(
                 is QsoState.SignOff -> "State 4: Sign Off (Awaiting 73/TU)"
                 is QsoState.DitDitFinale -> "State 5: Dit Dit Finale (Awaiting E E)"
                 is QsoState.Summary -> "State 6: QSO Summary"
+                is QsoState.Error -> "Error: Retrying (${state.message})"
                 // Legacy states
                 is QsoState.TransmittingCQ -> "Transmitting CQ"
                 is QsoState.ListeningForCaller -> "Listening for Caller"

@@ -169,7 +169,7 @@ class QsoSessionControllerTest {
             assertEquals("LZ2BB DE M7KQX QSL TNX NAME Boyan QTH Sofia BK", audioPlayer.history.last().text)
 
             // 3. User transmits info ack -> Bot transmits Sign-Off
-            dspStream.emitInput("QSL")
+            dspStream.emitInput("QSL FB")
             runCurrent()
             assertEquals(QsoState.SignOff, qsoManager.state.value)
             assertEquals(3, audioPlayer.history.size)
@@ -239,8 +239,8 @@ class QsoSessionControllerTest {
             assertEquals(QsoState.InitialResponse, qsoManager.state.value)
             audioPlayer.clear()
 
-            // Send incomprehensible input in State 2 (no report)
-            dspStream.emitInput("UNKNOWN GIBBERISH")
+            // Send incomprehensible input ending in K in State 2 (no report)
+            dspStream.emitInput("UNKNOWN GIBBERISH K")
             runCurrent()
 
             // Bot should transmit error recovery message "AGN AGN?"

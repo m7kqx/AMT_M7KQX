@@ -18,7 +18,7 @@ enum class ExchangeStage {
 
 /**
  * Finite State Machine states for the offline Morse code QSO simulator.
- * Supports the 6-stage sequential conversational loop and legacy states for compatibility.
+ * Supports the 6-stage sequential conversational loop, error state, and legacy states.
  */
 sealed class QsoState {
     // 6 Sequential States for the Offline QSO Conversational Loop
@@ -34,6 +34,12 @@ sealed class QsoState {
         val isCompleted: Boolean = true
     ) : QsoState()
 
+    // Error recovery state
+    data class Error(
+        val previousState: QsoState,
+        val message: String = "AGN AGN?"
+    ) : QsoState()
+
     // Legacy states for backwards compatibility
     data object Idle : QsoState()
     data object TransmittingCQ : QsoState()
@@ -46,10 +52,8 @@ sealed class QsoState {
  * Manages the QSO Finite State Machine lifecycle and processes decoded Morse
  * or user input to trigger synchronous, predictable transitions between QSO states.
  *
- * Implements the 6-stage sequential conversational loop:
- * State 1 (Listen CQ) -> State 2 (Initial Response) -> State 3 (Info Exchange) ->
- * State 4 (Sign Off) -> State 5 (Dit Dit Finale) -> State 6 (Summary).
- * Includes global error recovery and 5-second silence watchdog handling.
+ * Implements forgiving contextual validation via [QsoValidator] and routes to error
+ * recovery ("AGN AGN?") when input fails validation or 5-second silence timeout occurs.
  */
 class QsoManager(initialState: QsoState = QsoState.ListenCQ) {
 
@@ -90,10 +94,10 @@ class QsoManager(initialState: QsoState = QsoState.ListenCQ) {
         val ENDING_K_REGEX = Regex("""(?:\s|^)K(?:\s|$)""", RegexOption.IGNORE_CASE)
 
         // Matches acknowledgement / exchange responses in State 3
-        val INFO_ACK_REGEX = Regex("""\b(QSL|TNX|TU|R|RR|RRR|FB|OK|NAME|QTH|73)\b""", RegexOption.IGNORE_CASE)
+        val INFO_ACK_REGEX = Regex("""\b(NAME|OP|QTH|HR|FB|QSL|TNX|TU|R|RR|RRR|OK|73)\b""", RegexOption.IGNORE_CASE)
 
         // Matches standard sign-offs (73, TU, SK, QSL, etc.)
-        val SIGNOFF_REGEX = Regex("""\b(73|TU|SK|QSL|GL|TNX|THANKS|RRR|EE)\b""", RegexOption.IGNORE_CASE)
+        val SIGNOFF_REGEX = Regex("""\b(73|TU|SK|QSL|GL|TNX|THANKS|RRR|EE|GB)\b""", RegexOption.IGNORE_CASE)
 
         // Matches Dit-Dit final exchange in State 5 (E E, EE, or E)
         val DIT_DIT_REGEX = Regex("""\b(E\s+E|EE|E)\b""", RegexOption.IGNORE_CASE)
@@ -101,6 +105,7 @@ class QsoManager(initialState: QsoState = QsoState.ListenCQ) {
 
     /**
      * Evaluates incoming decoded Morse string tokens to trigger sequential FSM state transitions.
+     * Passes accumulated tokens to [QsoValidator] when "K" is received or when keywords match.
      *
      * @param input Raw text or decoded Morse token/word.
      */
@@ -108,121 +113,141 @@ class QsoManager(initialState: QsoState = QsoState.ListenCQ) {
         val trimmed = input.trim()
         if (trimmed.isEmpty()) return
 
-        when (val currentState = _state.value) {
+        when (_state.value) {
             is QsoState.Idle -> {
-                // If in Idle, transition to ListenCQ and process
                 _state.value = QsoState.ListenCQ
                 processInput(trimmed)
-            }
-
-            is QsoState.ListenCQ -> {
-                if (cqBuffer.isNotEmpty()) cqBuffer.append(" ")
-                cqBuffer.append(trimmed)
-
-                // Advance if 'K' is decoded
-                if (ENDING_K_REGEX.containsMatchIn(trimmed) || trimmed.equals("K", ignoreCase = true)) {
-                    evaluateCq()
-                }
-            }
-
-            is QsoState.InitialResponse -> {
-                val report = extractReport(trimmed)
-                if (report != null) {
-                    remoteReport = report
-                    _state.value = QsoState.InfoExchange
-                } else {
-                    // Global Error Recovery: incomprehensible input based on expected context
-                    triggerErrorRecovery()
-                }
-            }
-
-            is QsoState.InfoExchange -> {
-                if (INFO_ACK_REGEX.containsMatchIn(trimmed)) {
-                    _state.value = QsoState.SignOff
-                } else {
-                    triggerErrorRecovery()
-                }
-            }
-
-            is QsoState.SignOff -> {
-                if (DIT_DIT_REGEX.matches(trimmed)) {
-                    _state.value = QsoState.DitDitFinale
-                    _ditDitReceivedFlow.tryEmit(Unit)
-                } else if (SIGNOFF_REGEX.containsMatchIn(trimmed)) {
-                    _state.value = QsoState.DitDitFinale
-                } else {
-                    triggerErrorRecovery()
-                }
-            }
-
-            is QsoState.DitDitFinale -> {
-                if (DIT_DIT_REGEX.containsMatchIn(trimmed)) {
-                    _ditDitReceivedFlow.tryEmit(Unit)
-                }
+                return
             }
 
             is QsoState.Summary -> {
                 if (trimmed.equals("RESET", ignoreCase = true) || trimmed.equals("LOG", ignoreCase = true)) {
                     reset()
                 }
-            }
-
-            // Legacy FSM state handling for compatibility
-            is QsoState.TransmittingCQ -> {
-                if (ENDING_K_REGEX.containsMatchIn(trimmed) || trimmed.equals("K", ignoreCase = true)) {
-                    _state.value = QsoState.ListeningForCaller
-                } else {
-                    val callsign = extractCallsign(trimmed)
-                    if (callsign != null) {
-                        userCallsign = callsign
-                        remoteCallsign = callsign
-                        _state.value = QsoState.Exchanging(ExchangeStage.AWAITING_REPORT)
-                    }
-                }
-            }
-
-            is QsoState.ListeningForCaller -> {
-                val callsign = extractCallsign(trimmed)
-                if (callsign != null) {
-                    userCallsign = callsign
-                    remoteCallsign = callsign
-                    _state.value = QsoState.Exchanging(ExchangeStage.AWAITING_REPORT)
-                }
-            }
-
-            is QsoState.Exchanging -> {
-                when (currentState.stage) {
-                    ExchangeStage.AWAITING_CALLSIGN -> {
-                        val callsign = extractCallsign(trimmed)
-                        if (callsign != null) {
-                            userCallsign = callsign
-                            remoteCallsign = callsign
-                            _state.value = QsoState.Exchanging(ExchangeStage.AWAITING_REPORT)
-                        }
-                    }
-
-                    ExchangeStage.AWAITING_REPORT -> {
-                        val report = extractReport(trimmed)
-                        if (report != null) {
-                            remoteReport = report
-                            if (SIGNOFF_REGEX.containsMatchIn(trimmed)) {
-                                _state.value = QsoState.LoggingContact
-                            } else {
-                                _state.value = QsoState.Exchanging(ExchangeStage.COMPLETED)
-                            }
-                        }
-                    }
-
-                    ExchangeStage.COMPLETED -> {
-                        if (SIGNOFF_REGEX.containsMatchIn(trimmed)) {
-                            _state.value = QsoState.LoggingContact
-                        }
-                    }
-                }
+                return
             }
 
             is QsoState.LoggingContact -> {
                 if (trimmed.equals("RESET", ignoreCase = true) || trimmed.equals("LOG", ignoreCase = true)) {
+                    reset()
+                }
+                return
+            }
+
+            else -> {
+                if (cqBuffer.isNotEmpty()) cqBuffer.append(" ")
+                cqBuffer.append(trimmed)
+
+                val hasEndingK = ENDING_K_REGEX.containsMatchIn(trimmed) || trimmed.equals("K", ignoreCase = true)
+                val botCall = activeBotProfile?.callsign ?: ""
+
+                // Evaluate immediately if ending in "K"
+                if (hasEndingK) {
+                    evaluateAccumulated()
+                } else if (_state.value is QsoState.DitDitFinale) {
+                    if (DIT_DIT_REGEX.containsMatchIn(trimmed) || trimmed.equals("EE", ignoreCase = true)) {
+                        cqBuffer.clear()
+                        _ditDitReceivedFlow.tryEmit(Unit)
+                    }
+                } else if (_state.value !is QsoState.ListenCQ &&
+                    QsoValidator.validateDecode(_state.value, cqBuffer.toString(), botCall, userCallsign)
+                ) {
+                    // For states 2, 3, 4: evaluate immediately if input is already valid
+                    evaluateAccumulated()
+                }
+            }
+        }
+    }
+
+    /**
+     * Evaluates accumulated Morse string using [QsoValidator].
+     * If validation fails, triggers error recovery and remains in the exact same listening state.
+     * If validation passes, transitions FSM to the next sequential state.
+     */
+    fun evaluateAccumulated() {
+        val text = cqBuffer.toString().trim()
+        cqBuffer.clear()
+        if (text.isEmpty()) return
+
+        val currentState = _state.value
+        val botCall = activeBotProfile?.callsign ?: ""
+
+        val isValid = QsoValidator.validateDecode(
+            state = currentState,
+            decodedText = text,
+            botCallsign = botCall,
+            userCallsign = userCallsign
+        )
+
+        if (!isValid) {
+            triggerErrorRecovery("AGN AGN?")
+            return
+        }
+
+        when (currentState) {
+            is QsoState.Idle,
+            is QsoState.ListenCQ -> {
+                val callsign = extractCallsign(text)
+                if (callsign != null) {
+                    userCallsign = callsign
+                    remoteCallsign = callsign
+                }
+                _state.value = QsoState.InitialResponse
+            }
+
+            is QsoState.InitialResponse -> {
+                val report = extractReport(text)
+                remoteReport = report ?: "599"
+                _state.value = QsoState.InfoExchange
+            }
+
+            is QsoState.InfoExchange -> {
+                _state.value = QsoState.SignOff
+            }
+
+            is QsoState.SignOff -> {
+                _state.value = QsoState.DitDitFinale
+                if (DIT_DIT_REGEX.containsMatchIn(text) || text.contains("EE", ignoreCase = true)) {
+                    _ditDitReceivedFlow.tryEmit(Unit)
+                }
+            }
+
+            is QsoState.DitDitFinale -> {
+                if (DIT_DIT_REGEX.containsMatchIn(text) || text.contains("EE", ignoreCase = true)) {
+                    _ditDitReceivedFlow.tryEmit(Unit)
+                }
+            }
+
+            is QsoState.Error -> {
+                _state.value = currentState.previousState
+                evaluateAccumulated()
+            }
+
+            is QsoState.Summary -> {
+                if (text.equals("RESET", ignoreCase = true) || text.equals("LOG", ignoreCase = true)) {
+                    reset()
+                }
+            }
+
+            // Legacy states
+            is QsoState.TransmittingCQ -> {
+                _state.value = QsoState.InitialResponse
+            }
+            is QsoState.ListeningForCaller -> {
+                val callsign = extractCallsign(text)
+                if (callsign != null) {
+                    userCallsign = callsign
+                    remoteCallsign = callsign
+                }
+                _state.value = QsoState.InitialResponse
+            }
+            is QsoState.Exchanging -> {
+                val report = extractReport(text)
+                remoteReport = report ?: "599"
+                _state.value = QsoState.InfoExchange
+            }
+            is QsoState.LoggingContact -> {
+                if (text.equals("RESET", ignoreCase = true) || text.equals("LOG", ignoreCase = true)) {
                     reset()
                 }
             }
@@ -230,44 +255,41 @@ class QsoManager(initialState: QsoState = QsoState.ListenCQ) {
     }
 
     /**
-     * Evaluates accumulated CQ transmission in State 1 (Listen CQ).
-     * If valid callsign is decoded, transitions to State 2 (Initial Response).
-     * Otherwise triggers error recovery.
+     * Backward-compatible alias for State 1 CQ evaluation.
      */
     fun evaluateCq() {
-        val text = cqBuffer.toString().trim()
-        cqBuffer.clear()
-        if (text.isEmpty()) {
-            triggerErrorRecovery()
-            return
-        }
-
-        val callsign = extractCallsign(text)
-        val hasCq = CQ_REGEX.containsMatchIn(text)
-
-        if (callsign != null && (hasCq || text.contains("DE", ignoreCase = true) || text.length <= 15)) {
-            userCallsign = callsign
-            remoteCallsign = callsign
-            _state.value = QsoState.InitialResponse
-        } else {
-            triggerErrorRecovery()
-        }
+        evaluateAccumulated()
     }
 
     /**
-     * Handles silence watchdog timeouts in State 1 and State 5.
+     * Handles silence watchdog timeouts across all listening states.
+     * When 5 seconds of silence occur, passes accumulated string to [QsoValidator].
+     * If validation fails, triggers error state and returns to listening state.
      */
     fun onSilenceTimeout() {
         when (_state.value) {
-            is QsoState.ListenCQ -> {
+            is QsoState.ListenCQ,
+            is QsoState.InitialResponse,
+            is QsoState.InfoExchange,
+            is QsoState.SignOff -> {
                 if (cqBuffer.isNotEmpty()) {
-                    evaluateCq()
+                    evaluateAccumulated()
                 }
             }
             is QsoState.DitDitFinale -> {
-                completeQso()
+                if (cqBuffer.isNotEmpty()) {
+                    val text = cqBuffer.toString().trim()
+                    cqBuffer.clear()
+                    if (DIT_DIT_REGEX.containsMatchIn(text) || text.contains("EE", ignoreCase = true)) {
+                        _ditDitReceivedFlow.tryEmit(Unit)
+                    } else {
+                        completeQso()
+                    }
+                } else {
+                    completeQso()
+                }
             }
-            else -> { /* No-op for other states */ }
+            else -> { /* No-op for terminal states */ }
         }
     }
 
@@ -284,10 +306,17 @@ class QsoManager(initialState: QsoState = QsoState.ListenCQ) {
     }
 
     /**
-     * Triggers global error recovery: Bot emits "AGN AGN?" and FSM remains in current listening state.
+     * Triggers error recovery: transitions FSM to [QsoState.Error], emits "AGN AGN?",
+     * and returns to the exact same listening state.
      */
     fun triggerErrorRecovery(message: String = "AGN AGN?") {
+        val listeningState = when (val s = _state.value) {
+            is QsoState.Error -> s.previousState
+            else -> s
+        }
+        _state.value = QsoState.Error(previousState = listeningState, message = message)
         _errorRecoveryFlow.tryEmit(message)
+        _state.value = listeningState
     }
 
     /**

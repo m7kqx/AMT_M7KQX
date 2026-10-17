@@ -449,6 +449,11 @@ private fun QsoStatusIndicatorCard(
             "QSO completed successfully! Review contact summary below.",
             Color(0xFF2E7D32)
         )
+        is QsoState.Error -> Triple(
+            "ERROR: RETRYING",
+            "Incomprehensible decode. Bot transmitting '${state.message}'...",
+            Color(0xFFD32F2F)
+        )
         // Legacy states
         is QsoState.TransmittingCQ -> Triple(
             "TRANSMITTING CQ",

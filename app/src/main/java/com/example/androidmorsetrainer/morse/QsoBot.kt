@@ -222,6 +222,10 @@ class QsoBot(
                 ""
             }
 
+            is QsoState.Error -> {
+                state.message
+            }
+
             // Legacy states for backwards compatibility
             is QsoState.TransmittingCQ -> {
                 "$userCall DE $botCall K"
