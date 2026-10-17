@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -154,5 +155,39 @@ class GoertzelDspStreamTest {
         dspStream.stop()
         assertEquals("", dspStream.getCurrentSymbol())
         assertEquals("", dspStream.getCurrentWord())
+        assertEquals("", dspStream.telemetry.value.currentElementBuffer)
+    }
+
+    @Test
+    fun testCurrentElementBufferInTelemetryUpdatesOnElementsAndClearsOnCharacterBoundary() = runTest(testDispatcher) {
+        // Initially empty
+        assertEquals("", dspStream.telemetry.value.currentElementBuffer)
+
+        // 1. Dit (60ms)
+        dspStream.onKeyToneStarted(1000L)
+        dspStream.onKeyToneEnded(durationMs = 60L, timestampMs = 1060L)
+        assertEquals(".", dspStream.telemetry.value.currentElementBuffer)
+
+        // 2. Element space (60ms), then Dah (180ms)
+        dspStream.onKeyToneStarted(1120L)
+        dspStream.onKeyToneEnded(durationMs = 180L, timestampMs = 1300L)
+        assertEquals(".-", dspStream.telemetry.value.currentElementBuffer)
+
+        // 3. Advance virtual clock past character space threshold (~110ms at 20 WPM)
+        advanceTimeBy(150L)
+        runCurrent()
+
+        // Character 'A' committed, element buffer must be cleared back to empty
+        assertEquals("", dspStream.telemetry.value.currentElementBuffer)
+        assertEquals("A", dspStream.getCurrentWord())
+    }
+
+    @Test
+    fun testPauseListeningClearsElementBufferInTelemetry() {
+        dspStream.onKeyToneEnded(60L)
+        assertEquals(".", dspStream.telemetry.value.currentElementBuffer)
+
+        dspStream.pauseListening()
+        assertEquals("", dspStream.telemetry.value.currentElementBuffer)
     }
 }

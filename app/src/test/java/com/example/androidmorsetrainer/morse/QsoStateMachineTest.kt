@@ -271,4 +271,26 @@ class QsoStateMachineTest {
         qsoManager.processInput("GB OM")
         assertEquals(QsoState.DitDitFinale, qsoManager.state.value)
     }
+
+    @Test
+    fun testSilenceTimeoutWithEmptyBufferDoesNotTriggerErrorRecovery() = runTest {
+        val emittedErrors = mutableListOf<String>()
+        val job = launch {
+            qsoManager.errorRecoveryFlow.collect { emittedErrors.add(it) }
+        }
+        runCurrent()
+
+        assertEquals(QsoState.ListenCQ, qsoManager.state.value)
+        assertEquals("", qsoManager.getCqBufferContent())
+
+        // Timeout fires with empty buffer
+        qsoManager.onSilenceTimeout()
+        runCurrent()
+
+        // Must not emit error recovery, must remain in ListenCQ
+        assertEquals(0, emittedErrors.size)
+        assertEquals(QsoState.ListenCQ, qsoManager.state.value)
+
+        job.cancel()
+    }
 }

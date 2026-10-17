@@ -867,6 +867,48 @@ fun CalibrationTelemetryOverlay(
                 )
             }
 
+            // Real-Time Morse Element Buffer (in-progress symbol)
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (telemetry.currentElementBuffer.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "RAW MORSE BUFFER",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = if (telemetry.currentElementBuffer.isNotEmpty()) {
+                            "[ ${telemetry.currentElementBuffer} ]"
+                        } else {
+                            "—"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = if (telemetry.currentElementBuffer.isNotEmpty()) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                        }
+                    )
+                }
+            }
+
             // Key Timing Metrics: Last Tone, Last Silence, Dit Baseline
             Row(
                 modifier = Modifier.fillMaxWidth(),

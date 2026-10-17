@@ -277,4 +277,27 @@ class QsoSessionControllerTest {
 
         assertEquals(0, audioPlayer.history.size)
     }
+
+    @Test
+    fun testEmptyBufferSilenceTimeoutDoesNotTriggerErrorRecoveryAndKeepsListening() = runTest {
+        val sessionJob = launch {
+            controller.startSession(testBotProfile)
+        }
+        runCurrent()
+
+        try {
+            assertEquals(QsoState.ListenCQ, qsoManager.state.value)
+            assertTrue(qsoManager.getCqBufferContent().isEmpty())
+
+            // Advance time across multiple silence watchdog cycles (15s = 3x 5s)
+            advanceTimeBy(15000L)
+            runCurrent()
+
+            // State must remain ListenCQ, no audio played, no error triggered
+            assertEquals(QsoState.ListenCQ, qsoManager.state.value)
+            assertEquals(0, audioPlayer.history.size)
+        } finally {
+            sessionJob.cancel()
+        }
+    }
 }

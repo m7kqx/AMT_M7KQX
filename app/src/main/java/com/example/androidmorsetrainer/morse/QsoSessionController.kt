@@ -95,7 +95,7 @@ class QsoSessionController(
             }
         }
 
-        // 2. Silence watchdog coroutine for State 1 and State 5
+        // 2. Silence watchdog coroutine for listening states
         var silenceJob: Job? = null
 
         fun resetSilenceTimer(delayMs: Long = 5000L) {
@@ -110,7 +110,12 @@ class QsoSessionController(
         launch {
             dspStream.toneActivityFlow.collect {
                 val state = qsoManager.state.value
-                if (state is QsoState.ListenCQ || state is QsoState.DitDitFinale) {
+                if (state is QsoState.ListenCQ ||
+                    state is QsoState.InitialResponse ||
+                    state is QsoState.InfoExchange ||
+                    state is QsoState.SignOff ||
+                    state is QsoState.DitDitFinale
+                ) {
                     resetSilenceTimer(5000L)
                 }
             }
@@ -141,9 +146,12 @@ class QsoSessionController(
                 val isTransition = previousState != null && previousState != currentState
                 previousState = currentState
 
-                if (currentState is QsoState.DitDitFinale) {
+                if (currentState is QsoState.ListenCQ || currentState is QsoState.DitDitFinale) {
                     resetSilenceTimer(5000L)
-                } else if (currentState !is QsoState.ListenCQ) {
+                } else if (currentState !is QsoState.InitialResponse &&
+                    currentState !is QsoState.InfoExchange &&
+                    currentState !is QsoState.SignOff
+                ) {
                     silenceJob?.cancel()
                 }
 

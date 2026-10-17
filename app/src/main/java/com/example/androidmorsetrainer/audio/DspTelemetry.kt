@@ -14,5 +14,6 @@ data class DspTelemetry(
     val lastToneDurationMs: Long = 0L,
     val lastSilenceDurationMs: Long = 0L,
     val currentDitAverageMs: Float = 60f,
-    val noiseFloorThreshold: Float = 0.05f
+    val noiseFloorThreshold: Float = 0.05f,
+    val currentElementBuffer: String = ""
 )

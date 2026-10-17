@@ -91,8 +91,11 @@ open class GoertzelDspStream(
         isListeningPaused = true
         _isListening.value = false
         dspManager.isDecodingActive = false
-        currentSymbol.clear()
+        synchronized(currentSymbol) {
+            currentSymbol.clear()
+        }
         currentWord.clear()
+        updateTelemetry()
         silenceWatchdogJob?.cancel()
         silenceWatchdogJob = null
         lastToneEndTimeMs = 0L
@@ -148,13 +151,15 @@ open class GoertzelDspStream(
      * Updates [telemetry] StateFlow with current DSP and timing measurements.
      */
     private fun updateTelemetry(magnitude: Float = dspManager.dspState.value.currentMagnitude.toFloat()) {
+        val elementBuffer = synchronized(currentSymbol) { currentSymbol.toString() }
         _telemetry.update {
             it.copy(
                 currentMagnitude = magnitude,
                 lastToneDurationMs = lastToneDurationMs,
                 lastSilenceDurationMs = lastSilenceDurationMs,
                 currentDitAverageMs = timingEngine.rollingDitMs.toFloat(),
-                noiseFloorThreshold = dspManager.squelchThreshold.toFloat()
+                noiseFloorThreshold = dspManager.squelchThreshold.toFloat(),
+                currentElementBuffer = elementBuffer
             )
         }
     }
@@ -206,12 +211,14 @@ open class GoertzelDspStream(
 
         // 1. Pass duration to DynamicTimingEngine (outlier-filtered rolling dit update)
         timingEngine.recordElement(durationMs)
-        updateTelemetry()
 
         // 2. Classify tone as dit or dah using thresholds
         val thresholds = timingEngine.getThresholds()
         val symbol = if (thresholds.isDit(durationMs)) '.' else '-'
-        currentSymbol.append(symbol)
+        synchronized(currentSymbol) {
+            currentSymbol.append(symbol)
+        }
+        updateTelemetry()
 
         // 3. Start silence watchdog for trailing character or word completion
         startSilenceWatchdog()
@@ -236,9 +243,13 @@ open class GoertzelDspStream(
     }
 
     private fun commitCharacter() {
-        if (currentSymbol.isEmpty()) return
-        val pattern = currentSymbol.toString()
-        currentSymbol.clear()
+        val pattern = synchronized(currentSymbol) {
+            if (currentSymbol.isEmpty()) return
+            val pat = currentSymbol.toString()
+            currentSymbol.clear()
+            pat
+        }
+        updateTelemetry()
 
         val char = MorseConstants.REVERSE_MORSE_MAP[pattern] ?: "?"
         currentWord.append(char)
@@ -269,7 +280,9 @@ open class GoertzelDspStream(
         listeningJob?.cancel()
         listeningJob = null
         dspManager.stopListening()
-        currentSymbol.clear()
+        synchronized(currentSymbol) {
+            currentSymbol.clear()
+        }
         currentWord.clear()
         lastToneEndTimeMs = 0L
         updateTelemetry()
@@ -295,6 +308,6 @@ open class GoertzelDspStream(
         _telemetry.value = telemetryData
     }
 
-    fun getCurrentSymbol(): String = currentSymbol.toString()
+    fun getCurrentSymbol(): String = synchronized(currentSymbol) { currentSymbol.toString() }
     fun getCurrentWord(): String = currentWord.toString()
 }

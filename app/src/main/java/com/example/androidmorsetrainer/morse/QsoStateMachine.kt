@@ -258,12 +258,14 @@ class QsoManager(initialState: QsoState = QsoState.ListenCQ) {
      * Backward-compatible alias for State 1 CQ evaluation.
      */
     fun evaluateCq() {
+        if (cqBuffer.toString().trim().isEmpty()) return
         evaluateAccumulated()
     }
 
     /**
      * Handles silence watchdog timeouts across all listening states.
      * When 5 seconds of silence occur, passes accumulated string to [QsoValidator].
+     * If the decode buffer is empty (user hasn't started keying yet), keeps listening without triggering error.
      * If validation fails, triggers error state and returns to listening state.
      */
     fun onSilenceTimeout() {
@@ -272,19 +274,18 @@ class QsoManager(initialState: QsoState = QsoState.ListenCQ) {
             is QsoState.InitialResponse,
             is QsoState.InfoExchange,
             is QsoState.SignOff -> {
-                if (cqBuffer.isNotEmpty()) {
-                    evaluateAccumulated()
+                val text = cqBuffer.toString().trim()
+                if (text.isEmpty()) {
+                    // Buffer is empty: user hasn't started keying yet. Keep listening, do not trigger error.
+                    return
                 }
+                evaluateAccumulated()
             }
             is QsoState.DitDitFinale -> {
-                if (cqBuffer.isNotEmpty()) {
-                    val text = cqBuffer.toString().trim()
-                    cqBuffer.clear()
-                    if (DIT_DIT_REGEX.containsMatchIn(text) || text.contains("EE", ignoreCase = true)) {
-                        _ditDitReceivedFlow.tryEmit(Unit)
-                    } else {
-                        completeQso()
-                    }
+                val text = cqBuffer.toString().trim()
+                cqBuffer.clear()
+                if (text.isNotEmpty() && (DIT_DIT_REGEX.containsMatchIn(text) || text.contains("EE", ignoreCase = true))) {
+                    _ditDitReceivedFlow.tryEmit(Unit)
                 } else {
                     completeQso()
                 }
