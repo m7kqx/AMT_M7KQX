@@ -11,7 +11,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -20,9 +25,11 @@ import kotlinx.coroutines.launch
  * Wraps [MorseDSPManager] (handling microphone capture via AudioRecord and real-time Goertzel FFT)
  * and [DynamicTimingEngine] to decode Morse elements and spaces into text tokens and words.
  *
+ * Emits real-time [DspTelemetry] throttled to 10-20 FPS to prevent Compose recomposition thrashing.
+ *
  * Concurrency:
  * - Audio capture runs strictly on [Dispatchers.IO].
- * - Goertzel signal processing and Morse element classification run strictly on [Dispatchers.Default].
+ * - Goertzel signal processing, telemetry polling, and element classification run strictly on [Dispatchers.Default].
  */
 open class GoertzelDspStream(
     val dspManager: MorseDSPManager = MorseDSPManager(),
@@ -33,16 +40,44 @@ open class GoertzelDspStream(
 
     companion object {
         private const val TAG = "GoertzelDspStream"
+        const val TELEMETRY_THROTTLE_MS = 60L // ~16.6 FPS (safely within 10-20 FPS limit)
     }
 
     private val _characterFlow = MutableSharedFlow<String>(extraBufferCapacity = 64)
     override val characterFlow: Flow<String> = _characterFlow.asSharedFlow()
 
+    private val _toneActivityFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 64)
+    override val toneActivityFlow: Flow<Unit> = _toneActivityFlow.asSharedFlow()
+
+    private val _isListening = MutableStateFlow(true)
+    override val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
+
+    @Volatile
+    var isListeningPaused: Boolean = false
+        private set
+
+    private val _telemetry = MutableStateFlow(
+        DspTelemetry(
+            noiseFloorThreshold = dspManager.squelchThreshold.toFloat(),
+            currentDitAverageMs = timingEngine.rollingDitMs.toFloat()
+        )
+    )
+    val telemetry: StateFlow<DspTelemetry> = _telemetry.asStateFlow()
+
     private val currentSymbol = StringBuilder()
     private val currentWord = StringBuilder()
 
+    @Volatile
+    var lastToneDurationMs: Long = 0L
+        private set
+
+    @Volatile
+    var lastSilenceDurationMs: Long = 0L
+        private set
+
     private var lastToneEndTimeMs: Long = 0L
     private var listeningJob: Job? = null
+    private var telemetryJob: Job? = null
     private var silenceWatchdogJob: Job? = null
 
     init {
@@ -50,7 +85,31 @@ open class GoertzelDspStream(
     }
 
     /**
-     * Starts microphone audio capture and Goertzel tone processing on background threads.
+     * Pauses DSP decoding and drops incoming microphone audio for half-duplex operation.
+     */
+    override fun pauseListening() {
+        isListeningPaused = true
+        _isListening.value = false
+        dspManager.isDecodingActive = false
+        currentSymbol.clear()
+        currentWord.clear()
+        silenceWatchdogJob?.cancel()
+        silenceWatchdogJob = null
+        lastToneEndTimeMs = 0L
+    }
+
+    /**
+     * Resumes DSP decoding of microphone audio after simulated bot transmission finishes.
+     */
+    override fun resumeListening() {
+        isListeningPaused = false
+        _isListening.value = true
+        dspManager.isDecodingActive = true
+        lastToneEndTimeMs = 0L
+    }
+
+    /**
+     * Starts microphone audio capture, Goertzel tone processing, and throttled telemetry updates.
      */
     @Synchronized
     open fun start() {
@@ -58,15 +117,55 @@ open class GoertzelDspStream(
 
         dspManager.startListening()
 
+        // 1. Listen for real-time tone events from Goertzel DSP
         listeningJob = scope.launch(defaultDispatcher) {
             dspManager.toneEvents.collect { event ->
+                if (isListeningPaused) return@collect
                 if (event.isTonePresent) {
+                    _toneActivityFlow.tryEmit(Unit)
                     onKeyToneStarted(event.timestampMs)
                 } else {
                     onKeyToneEnded(event.durationMs, event.timestampMs)
                 }
             }
         }
+
+        // 2. Throttled telemetry updates based on incoming DSP state (throttled to <= 16.6 FPS)
+        telemetryJob?.cancel()
+        telemetryJob = scope.launch(defaultDispatcher) {
+            var lastEmittedTime = 0L
+            dspManager.dspState.collect { dspState ->
+                val now = System.currentTimeMillis()
+                if (now - lastEmittedTime >= TELEMETRY_THROTTLE_MS || !dspState.isListening) {
+                    lastEmittedTime = now
+                    updateTelemetry(dspState.currentMagnitude.toFloat())
+                }
+            }
+        }
+    }
+
+    /**
+     * Updates [telemetry] StateFlow with current DSP and timing measurements.
+     */
+    private fun updateTelemetry(magnitude: Float = dspManager.dspState.value.currentMagnitude.toFloat()) {
+        _telemetry.update {
+            it.copy(
+                currentMagnitude = magnitude,
+                lastToneDurationMs = lastToneDurationMs,
+                lastSilenceDurationMs = lastSilenceDurationMs,
+                currentDitAverageMs = timingEngine.rollingDitMs.toFloat(),
+                noiseFloorThreshold = dspManager.squelchThreshold.toFloat()
+            )
+        }
+    }
+
+    /**
+     * Updates the Goertzel squelch threshold in real-time.
+     */
+    open fun updateNoiseFloor(threshold: Float) {
+        val clamped = threshold.coerceIn(MorseDSPManager.MIN_SQUELCH_MAGNITUDE.toFloat(), MorseDSPManager.MAX_SQUELCH_MAGNITUDE.toFloat())
+        dspManager.setSquelchThreshold(clamped.toDouble())
+        updateTelemetry()
     }
 
     /**
@@ -79,6 +178,8 @@ open class GoertzelDspStream(
 
         if (lastToneEndTimeMs > 0L) {
             val silenceDuration = (timestampMs - lastToneEndTimeMs).coerceAtLeast(0L)
+            lastSilenceDurationMs = silenceDuration
+            updateTelemetry()
             val thresholds = timingEngine.getThresholds()
 
             if (thresholds.isWordSpace(silenceDuration)) {
@@ -100,10 +201,12 @@ open class GoertzelDspStream(
     open fun onKeyToneEnded(durationMs: Long, timestampMs: Long = System.currentTimeMillis()) {
         if (durationMs < DynamicTimingEngine.MIN_VALID_PULSE_MS) return
 
+        lastToneDurationMs = durationMs
         lastToneEndTimeMs = timestampMs
 
         // 1. Pass duration to DynamicTimingEngine (outlier-filtered rolling dit update)
         timingEngine.recordElement(durationMs)
+        updateTelemetry()
 
         // 2. Classify tone as dit or dah using thresholds
         val thresholds = timingEngine.getThresholds()
@@ -159,6 +262,8 @@ open class GoertzelDspStream(
      */
     @Synchronized
     open fun stop() {
+        telemetryJob?.cancel()
+        telemetryJob = null
         silenceWatchdogJob?.cancel()
         silenceWatchdogJob = null
         listeningJob?.cancel()
@@ -167,6 +272,7 @@ open class GoertzelDspStream(
         currentSymbol.clear()
         currentWord.clear()
         lastToneEndTimeMs = 0L
+        updateTelemetry()
         Log.d(TAG, "GoertzelDspStream stopped and microphone capture released")
     }
 
@@ -174,19 +280,21 @@ open class GoertzelDspStream(
      * Allows manual injection of Morse tokens into the stream for testing or simulation.
      */
     open fun emitManual(input: String) {
+        if (isListeningPaused) return
         val trimmed = input.trim()
         if (trimmed.isNotEmpty()) {
+            _toneActivityFlow.tryEmit(Unit)
             _characterFlow.tryEmit(trimmed)
         }
     }
 
     /**
-     * Exposes current in-progress symbol for testing and verification.
+     * Manually updates telemetry values (convenient for testing).
      */
-    fun getCurrentSymbol(): String = currentSymbol.toString()
+    fun setTelemetryForTest(telemetryData: DspTelemetry) {
+        _telemetry.value = telemetryData
+    }
 
-    /**
-     * Exposes current in-progress word for testing and verification.
-     */
+    fun getCurrentSymbol(): String = currentSymbol.toString()
     fun getCurrentWord(): String = currentWord.toString()
 }

@@ -33,6 +33,7 @@ import com.example.androidmorsetrainer.ui.screens.decode.DecodeScreen
 import com.example.androidmorsetrainer.ui.screens.decode.DecodeViewModel
 import com.example.androidmorsetrainer.ui.screens.profiles.ProfilesScreen
 import com.example.androidmorsetrainer.ui.screens.profiles.ProfilesViewModel
+import com.example.androidmorsetrainer.ui.screens.qso.QsoPracticeScreen
 import com.example.androidmorsetrainer.ui.screens.send.SendScreen
 import com.example.androidmorsetrainer.ui.screens.send.SendViewModel
 import com.example.androidmorsetrainer.ui.screens.train.TrainScreen
@@ -86,6 +87,7 @@ fun MorseTrainerApp(
                             text = when (currentTab) {
                                 NavigationTab.TRAIN -> "Koch Morse Trainer"
                                 NavigationTab.SEND -> "Hardware Keying Practice"
+                                NavigationTab.QSO -> "QSO Simulator"
                                 NavigationTab.DECODE -> "Morse Decoder"
                                 NavigationTab.SETUP -> "Decoder Setup"
                                 NavigationTab.PROFILES -> "User Profiles"
@@ -153,6 +155,11 @@ fun MorseTrainerApp(
                 SendScreen(
                     activeProfile = profilesUiState.activeProfile,
                     viewModel = sendViewModel,
+                    modifier = contentModifier,
+                )
+            }
+            NavigationTab.QSO -> {
+                QsoPracticeScreen(
                     modifier = contentModifier,
                 )
             }

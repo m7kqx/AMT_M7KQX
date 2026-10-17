@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.androidmorsetrainer.MorseTrainerApplication
+import com.example.androidmorsetrainer.audio.DspTelemetry
 import com.example.androidmorsetrainer.audio.GoertzelDspStream
 import com.example.androidmorsetrainer.audio.MorseAudioGenerator
 import com.example.androidmorsetrainer.audio.MorseDSPManager
@@ -23,18 +24,38 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Stubbed implementation of [DspCharacterStream] for unit testing and manual input simulation.
+ * Stubbed implementation of [DspCharacterStream] for unit testing.
  */
 class StubDspCharacterStream : DspCharacterStream {
     private val _characterFlow = MutableSharedFlow<String>(extraBufferCapacity = 64)
-    override val characterFlow: Flow<String> = _characterFlow
+    override val characterFlow: Flow<String> = _characterFlow.asSharedFlow()
+
+    private val _toneActivityFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 64)
+    override val toneActivityFlow: Flow<Unit> = _toneActivityFlow.asSharedFlow()
+
+    private val _isListening = MutableStateFlow(true)
+    override val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
+
+    override fun pauseListening() {
+        _isListening.value = false
+    }
+
+    override fun resumeListening() {
+        _isListening.value = true
+    }
 
     fun emitInput(text: String) {
+        _toneActivityFlow.tryEmit(Unit)
         _characterFlow.tryEmit(text)
+    }
+
+    fun emitTone() {
+        _toneActivityFlow.tryEmit(Unit)
     }
 }
 
@@ -78,6 +99,13 @@ class QsoViewModel(
         fun formatStateDescription(state: QsoState): String {
             return when (state) {
                 is QsoState.Idle -> "Idle"
+                is QsoState.ListenCQ -> "State 1: Listening for CQ"
+                is QsoState.InitialResponse -> "State 2: Initial Response (Awaiting RST)"
+                is QsoState.InfoExchange -> "State 3: Info Exchange (Awaiting Info/ACK)"
+                is QsoState.SignOff -> "State 4: Sign Off (Awaiting 73/TU)"
+                is QsoState.DitDitFinale -> "State 5: Dit Dit Finale (Awaiting E E)"
+                is QsoState.Summary -> "State 6: QSO Summary"
+                // Legacy states
                 is QsoState.TransmittingCQ -> "Transmitting CQ"
                 is QsoState.ListeningForCaller -> "Listening for Caller"
                 is QsoState.Exchanging -> when (state.stage) {
@@ -102,8 +130,27 @@ class QsoViewModel(
     private val _transcript = MutableStateFlow<List<String>>(emptyList())
     val transcript: StateFlow<List<String>> = _transcript.asStateFlow()
 
+    // 4. Expose real-time DSP telemetry to the UI
+    val telemetry: StateFlow<DspTelemetry> = if (dspStream is GoertzelDspStream) {
+        dspStream.telemetry
+    } else {
+        MutableStateFlow(DspTelemetry())
+    }
+
     val sessionController: QsoSessionController
     private var sessionJob: Job? = null
+
+    // 5. Expose microphone half-duplex mute status to the UI
+    val isMicMuted: StateFlow<Boolean>
+
+    /**
+     * Passes the user's manual noise floor / squelch threshold adjustment down to GoertzelDspStream.
+     */
+    fun updateNoiseFloor(threshold: Float) {
+        if (dspStream is GoertzelDspStream) {
+            dspStream.updateNoiseFloor(threshold)
+        }
+    }
 
     init {
         // Decorate audio player to log bot transmissions to console and play hardware AudioTrack audio
@@ -120,6 +167,8 @@ class QsoViewModel(
             audioPlayer = compositeAudioPlayer
         )
 
+        isMicMuted = sessionController.isMicMuted
+
         // Monitor FSM state transitions for console transcription
         viewModelScope.launch {
             qsoManager.stateFlow.collect { state ->
@@ -132,6 +181,13 @@ class QsoViewModel(
         viewModelScope.launch {
             dspStream.characterFlow.collect { decodedText ->
                 addTranscriptEntry("DSP Decoded: $decodedText")
+            }
+        }
+
+        // Monitor error recovery events
+        viewModelScope.launch {
+            qsoManager.errorRecoveryFlow.collect { errorMsg ->
+                addTranscriptEntry("SYS: Error Recovery -> Bot transmitting '$errorMsg'")
             }
         }
 
@@ -148,7 +204,7 @@ class QsoViewModel(
         if (audioPlayer is SineWaveMorsePlayer) {
             audioPlayer.stop()
         }
-        qsoManager.reset()
+        qsoManager.reset(QsoState.ListenCQ)
 
         val newProfile = qsoBot.generateProfile()
         _activeProfile.value = newProfile
@@ -164,7 +220,7 @@ class QsoViewModel(
     }
 
     /**
-     * Injects simulated text into the DSP stream (e.g. from UI buttons or keyboard).
+     * Injects simulated text into the DSP stream (e.g. from tests or programmatic driving).
      */
     fun simulateInput(input: String) {
         val trimmed = input.trim()

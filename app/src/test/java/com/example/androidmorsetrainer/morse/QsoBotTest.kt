@@ -153,4 +153,37 @@ class QsoBotTest {
         )
         assertEquals("G4ABC DE N1BAM UR 599 599 BK", response)
     }
+
+    @Test
+    fun testConstructResponseForSequentialSixStates() {
+        val profile = QsoBotProfile(callsign = "LZ2BB", name = "Boyan", qth = "Sofia", wpm = 18)
+        bot.selectProfile(profile)
+
+        // State 2: Initial Response
+        assertEquals(
+            "LZ2BB DE M7KQX UR RST IS 599 5NN BK",
+            bot.constructResponse(QsoState.InitialResponse)
+        )
+
+        // State 3: Info Exchange
+        assertEquals(
+            "LZ2BB DE M7KQX QSL TNX NAME Boyan QTH Sofia BK",
+            bot.constructResponse(QsoState.InfoExchange)
+        )
+
+        // State 4: Sign Off
+        assertEquals(
+            "TU FER QSO 73 DE LZ2BB SK",
+            bot.constructResponse(QsoState.SignOff)
+        )
+
+        // State 5: Dit Dit Finale
+        assertEquals("E E", bot.constructResponse(QsoState.DitDitFinale))
+
+        // State 6: Summary
+        assertEquals("", bot.constructResponse(QsoState.Summary()))
+
+        // Error Recovery
+        assertEquals("AGN AGN?", bot.constructErrorResponse())
+    }
 }

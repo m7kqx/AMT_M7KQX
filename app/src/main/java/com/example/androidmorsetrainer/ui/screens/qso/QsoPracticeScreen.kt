@@ -21,12 +21,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Mic
@@ -35,18 +35,17 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,18 +61,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.androidmorsetrainer.audio.DspTelemetry
+import com.example.androidmorsetrainer.audio.MorseDSPManager
 import com.example.androidmorsetrainer.morse.ExchangeStage
 import com.example.androidmorsetrainer.morse.QsoBotProfile
 import com.example.androidmorsetrainer.morse.QsoState
+import java.util.Locale
 
 /**
  * Jetpack Compose screen for the offline Morse code QSO simulator practice module.
+ * Strictly relies on real-time Goertzel DSP microphone decoding for half-duplex practice.
  */
 @Composable
 fun QsoPracticeScreen(
@@ -105,9 +107,11 @@ fun QsoPracticeScreen(
     val qsoState by viewModel.qsoState.collectAsStateWithLifecycle()
     val activeProfile by viewModel.activeProfile.collectAsStateWithLifecycle()
     val transcript by viewModel.transcript.collectAsStateWithLifecycle()
+    val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
+    val isMicMuted by viewModel.isMicMuted.collectAsStateWithLifecycle()
 
-    var manualInputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val scrollState = rememberScrollState()
 
     // Automatically scroll to bottom of the console whenever new transcript lines arrive
     LaunchedEffect(transcript.size) {
@@ -119,16 +123,40 @@ fun QsoPracticeScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .verticalScroll(scrollState)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Simulated Operator Header
+        // 1. Hardware Calibration & Real-time DSP Telemetry Overlay (Permanently visible at the very top)
+        CalibrationTelemetryOverlay(
+            telemetry = telemetry,
+            onThresholdChanged = { viewModel.updateNoiseFloor(it) }
+        )
+
+        // 2. Strict Half-Duplex Microphone Status Banner
+        MicrophoneHalfDuplexBanner(isMuted = isMicMuted)
+
+        // 3. Simulated Operator Header
         OperatorHeaderCard(profile = activeProfile)
 
-        // 2. Prominent QSO FSM Status Indicator
+        // 4. Prominent QSO FSM Status Indicator (6 Sequential States)
         QsoStatusIndicatorCard(state = qsoState)
 
-        // 3. Permission Alert Banner (if microphone access is not yet granted)
+        // 5. QSO Contact Summary Card (Shown when session completes in State 6)
+        if (qsoState is QsoState.Summary) {
+            QsoSummaryCard(
+                summary = qsoState as QsoState.Summary,
+                onStartNewQso = {
+                    if (hasAudioPermission) {
+                        viewModel.startNewQso()
+                    } else {
+                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                }
+            )
+        }
+
+        // 6. Permission Alert Banner (if microphone access is not yet granted)
         if (!hasAudioPermission) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -158,29 +186,16 @@ fun QsoPracticeScreen(
             }
         }
 
-        // 4. Scrolling Exchange Transcription Waterfall / Console
+        // 7. Scrolling Exchange Transcription Waterfall / Console
         ConsoleTranscriptionCard(
             transcript = transcript,
             listState = listState,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(260.dp)
         )
 
-        // 5. Manual / Quick Simulation Input Row
-        SimulationInputRow(
-            text = manualInputText,
-            onTextChanged = { manualInputText = it },
-            onSend = {
-                if (manualInputText.isNotBlank()) {
-                    viewModel.simulateInput(manualInputText)
-                    manualInputText = ""
-                }
-            },
-            onQuickSend = { quickToken ->
-                viewModel.simulateInput(quickToken)
-            }
-        )
-
-        // 6. Controls: Start New QSO (with audio permission gate) & Clear Log
+        // 8. Session Controls: Start New QSO & Clear Log
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -210,6 +225,70 @@ fun QsoPracticeScreen(
                 onClick = { viewModel.clearTranscript() }
             ) {
                 Icon(Icons.Default.DeleteOutline, contentDescription = "Clear Log")
+            }
+        }
+    }
+}
+
+/**
+ * Prominent banner indicating half-duplex microphone status:
+ * - MUTED (BOT TX): Audio capture paused during simulated bot audio transmission to prevent acoustic self-decoding.
+ * - LISTENING (USER TX): Microphone active and DSP Goertzel decoder actively listening for user CW.
+ */
+@Composable
+fun MicrophoneHalfDuplexBanner(
+    isMuted: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val bannerColor = if (isMuted) Color(0xFFD32F2F) else Color(0xFF2E7D32)
+    val containerBg = if (isMuted) Color(0xFFFFEBEE) else Color(0xFFE8F5E9)
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(1.5.dp, bannerColor.copy(alpha = 0.6f), RoundedCornerShape(10.dp)),
+        colors = CardDefaults.cardColors(containerColor = containerBg),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(bannerColor),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                    contentDescription = if (isMuted) "Microphone Muted" else "Microphone Active",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isMuted) "MICROPHONE MUTED (BOT TX)" else "MICROPHONE ACTIVE (LISTENING)",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace,
+                    color = bannerColor
+                )
+                Text(
+                    text = if (isMuted)
+                        "Half-duplex lock: Audio input paused during bot playback to prevent self-decoding."
+                    else
+                        "Half-duplex active: Goertzel DSP listening for your CW transmission.",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 11.sp,
+                    color = Color.DarkGray
+                )
             }
         }
     }
@@ -327,6 +406,7 @@ private fun OperatorHeaderCard(
 
 /**
  * Prominent status indicator card displaying the current [QsoState].
+ * Configured for the 6-state sequential conversational loop.
  */
 @Composable
 private fun QsoStatusIndicatorCard(
@@ -335,10 +415,41 @@ private fun QsoStatusIndicatorCard(
 ) {
     val (statusTitle, statusDetail, targetColor) = when (state) {
         is QsoState.Idle -> Triple(
-            "IDLE",
-            "Ready for transmission. Send 'CQ' to initiate contact.",
+            "STATE 1: IDLE / READY",
+            "Ready for transmission. Transmit 'CQ' to initiate contact.",
             Color(0xFF78909C)
         )
+        is QsoState.ListenCQ -> Triple(
+            "STATE 1: LISTEN CQ",
+            "DSP listening for CQ. Send 'CQ CQ DE [Callsign] K'. Auto-advances on 'K' or 5s silence.",
+            Color(0xFF1E88E5)
+        )
+        is QsoState.InitialResponse -> Triple(
+            "STATE 2: INITIAL RESPONSE",
+            "Bot transmitted initial response. Transmit your signal report (e.g. 599, 5NN BK).",
+            Color(0xFFFB8C00)
+        )
+        is QsoState.InfoExchange -> Triple(
+            "STATE 3: INFO EXCHANGE",
+            "Bot transmitted Name & QTH. Transmit acknowledgement (e.g. QSL, TNX, 73).",
+            Color(0xFF8E24AA)
+        )
+        is QsoState.SignOff -> Triple(
+            "STATE 4: SIGN OFF",
+            "Bot transmitted 73 sign-off. Acknowledge with '73', 'TU', or 'SK'.",
+            Color(0xFF00897B)
+        )
+        is QsoState.DitDitFinale -> Triple(
+            "STATE 5: DIT DIT FINALE",
+            "Bot listening for final 'E E' (dit-dit) goodbye. Auto-completes on 5s silence.",
+            Color(0xFF43A047)
+        )
+        is QsoState.Summary -> Triple(
+            "STATE 6: QSO COMPLETE",
+            "QSO completed successfully! Review contact summary below.",
+            Color(0xFF2E7D32)
+        )
+        // Legacy states
         is QsoState.TransmittingCQ -> Triple(
             "TRANSMITTING CQ",
             "Transmitting callsign. Finish call with 'K'.",
@@ -416,6 +527,130 @@ private fun QsoStatusIndicatorCard(
 }
 
 /**
+ * Summary card displayed in State 6 showing QSO contact details and action to start another QSO.
+ */
+@Composable
+fun QsoSummaryCard(
+    summary: QsoState.Summary,
+    onStartNewQso: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(2.dp, Color(0xFF2E7D32), RoundedCornerShape(12.dp)),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFF1F8E9)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "Success",
+                    tint = Color(0xFF2E7D32),
+                    modifier = Modifier.size(24.dp)
+                )
+                Text(
+                    text = "QSO SUMMARY & LOG",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF2E7D32)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(
+                        text = "OPERATOR",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.DarkGray
+                    )
+                    Text(
+                        text = "${summary.botProfile?.callsign ?: "REMOTE"} (${summary.botProfile?.name ?: "Operator"})",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color.Black
+                    )
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "QTH",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.DarkGray
+                    )
+                    Text(
+                        text = summary.botProfile?.qth ?: "Unknown",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(
+                        text = "YOUR CALLSIGN",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.DarkGray
+                    )
+                    Text(
+                        text = summary.userCallsign,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color.Black
+                    )
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "RST REPORT",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.DarkGray
+                    )
+                    Text(
+                        text = summary.userReport ?: "599",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color.Black
+                    )
+                }
+            }
+
+            Button(
+                onClick = onStartNewQso,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Log Contact & Start Next QSO")
+            }
+        }
+    }
+}
+
+/**
  * Scrolling waterfall/console log card displaying real-time QSO exchange transcriptions.
  */
 @Composable
@@ -482,6 +717,7 @@ private fun ConsoleTranscriptionCard(
                             line.startsWith("TX") -> Color(0xFF81C784) // Green for user transmission
                             line.startsWith("RX") -> Color(0xFFFFD54F) // Amber for bot transmission
                             line.startsWith("===") -> Color(0xFF64B5F6) // Blue for headers
+                            line.startsWith("SYS: Mic") -> Color(0xFFFF8A80) // Soft red/coral for mic muting
                             line.startsWith("SYS") -> Color(0xFFB0BEC5) // Slate for system states
                             line.startsWith("DSP") -> Color(0xFF80DEEA) // Cyan for DSP decoded
                             else -> Color.White
@@ -504,70 +740,220 @@ private fun ConsoleTranscriptionCard(
 }
 
 /**
- * Quick simulation action chips and manual input row for testing and practicing.
+ * Real-time Hardware Calibration and DSP Telemetry overlay.
+ * Permanently displayed at the top of the QSO practice screen for tuning squelch,
+ * monitoring Goertzel signal magnitude, and tracking dynamic timing engine metrics.
  */
 @Composable
-private fun SimulationInputRow(
-    text: String,
-    onTextChanged: (String) -> Unit,
-    onSend: () -> Unit,
-    onQuickSend: (String) -> Unit,
+fun CalibrationTelemetryOverlay(
+    telemetry: DspTelemetry,
+    onThresholdChanged: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    val isToneDetected = telemetry.currentMagnitude >= telemetry.noiseFloorThreshold
+    val activeColor = if (isToneDetected) Color(0xFF4CAF50) else MaterialTheme.colorScheme.primary
+    val maxDisplayMagnitude = 0.300f
+    val normalizedProgress = (telemetry.currentMagnitude / maxDisplayMagnitude).coerceIn(0f, 1f)
+    val calculatedWpm = if (telemetry.currentDitAverageMs > 0) {
+        (1200f / telemetry.currentDitAverageMs).toInt()
+    } else {
+        0
+    }
+
+    ElevatedCard(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
     ) {
-        // Quick Action Chips for Morse QSO tokens
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            val quickTokens = listOf("CQ", "K", "M7KQX", "599", "73")
-            for (token in quickTokens) {
-                FilterChip(
-                    selected = false,
-                    onClick = { onQuickSend(token) },
-                    label = {
-                        Text(
-                            token,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold
-                        )
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+            // Header Row: Title & Tone Detection Pill
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = "Calibration & Telemetry",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
                     )
+                    Text(
+                        text = "DSP CALIBRATION & TELEMETRY",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // Tone Detection Status Pill
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isToneDetected) Color(0xFF2E7D32) else MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (isToneDetected) Color(0xFF81C784) else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(if (isToneDetected) Color.Green else Color.Gray)
+                        )
+                        Text(
+                            text = if (isToneDetected) "TONE DETECTED" else "SQUELCHED",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (isToneDetected) Color.White else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            }
+
+            // Live Magnitude Meter
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Goertzel Magnitude",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = String.format(Locale.US, "%.4f / %.3f", telemetry.currentMagnitude, telemetry.noiseFloorThreshold),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isToneDetected) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                LinearProgressIndicator(
+                    progress = { normalizedProgress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(10.dp)
+                        .clip(RoundedCornerShape(5.dp)),
+                    color = activeColor,
+                    trackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+                )
+            }
+
+            // Key Timing Metrics: Last Tone, Last Silence, Dit Baseline
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Last Tone Box
+                TimingMetricBox(
+                    label = "LAST TONE",
+                    value = "${telemetry.lastToneDurationMs} ms",
+                    modifier = Modifier.weight(1f)
+                )
+
+                // Last Silence Box
+                TimingMetricBox(
+                    label = "LAST SILENCE",
+                    value = "${telemetry.lastSilenceDurationMs} ms",
+                    modifier = Modifier.weight(1f)
+                )
+
+                // Dit Average Box
+                TimingMetricBox(
+                    label = "DIT BASELINE",
+                    value = String.format(Locale.US, "%.0f ms (%dW)", telemetry.currentDitAverageMs, calculatedWpm),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Noise Floor / Squelch Slider
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Squelch Threshold",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = String.format(Locale.US, "%.3f", telemetry.noiseFloorThreshold),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                Slider(
+                    value = telemetry.noiseFloorThreshold.coerceIn(
+                        MorseDSPManager.MIN_SQUELCH_MAGNITUDE.toFloat(),
+                        MorseDSPManager.MAX_SQUELCH_MAGNITUDE.toFloat()
+                    ),
+                    onValueChange = onThresholdChanged,
+                    valueRange = MorseDSPManager.MIN_SQUELCH_MAGNITUDE.toFloat()..MorseDSPManager.MAX_SQUELCH_MAGNITUDE.toFloat(),
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }
+    }
+}
 
-        // Text input field
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+@Composable
+private fun TimingMetricBox(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChanged,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Simulate Morse Input (e.g. CQ, 599)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { onSend() })
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
             )
-
-            IconButton(
-                onClick = onSend,
-                enabled = text.isNotBlank()
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send Input",
-                    tint = if (text.isNotBlank()) MaterialTheme.colorScheme.primary else Color.Gray
-                )
-            }
+            Text(
+                text = value,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface
+            )
         }
     }
 }

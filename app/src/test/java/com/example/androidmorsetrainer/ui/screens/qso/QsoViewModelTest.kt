@@ -1,6 +1,5 @@
 package com.example.androidmorsetrainer.ui.screens.qso
 
-import com.example.androidmorsetrainer.morse.ExchangeStage
 import com.example.androidmorsetrainer.morse.QsoBot
 import com.example.androidmorsetrainer.morse.QsoManager
 import com.example.androidmorsetrainer.morse.QsoState
@@ -51,8 +50,8 @@ class QsoViewModelTest {
     fun testInitializationStartsSessionWithValidProfile() = runTest {
         advanceUntilIdle()
 
-        // 1. Initial State should be Idle
-        assertEquals(QsoState.Idle, viewModel.qsoState.value)
+        // 1. Initial State should be State 1: ListenCQ
+        assertEquals(QsoState.ListenCQ, viewModel.qsoState.value)
 
         // 2. Active profile is populated
         val profile = viewModel.activeProfile.value
@@ -68,49 +67,41 @@ class QsoViewModelTest {
     fun testStartNewQsoGeneratesNewProfileAndResetsFsm() = runTest {
         advanceUntilIdle()
 
-        // Advance FSM into TransmittingCQ
-        viewModel.simulateInput("CQ")
+        // Advance FSM into InitialResponse
+        viewModel.simulateInput("CQ CQ DE M7KQX K")
         advanceUntilIdle()
-        assertEquals(QsoState.TransmittingCQ, viewModel.qsoState.value)
-
-        val firstProfile = viewModel.activeProfile.value
+        assertEquals(QsoState.InitialResponse, viewModel.qsoState.value)
 
         // Trigger new QSO
         viewModel.startNewQso()
         advanceUntilIdle()
 
-        // State must reset to Idle
-        assertEquals(QsoState.Idle, viewModel.qsoState.value)
+        // State must reset to ListenCQ
+        assertEquals(QsoState.ListenCQ, viewModel.qsoState.value)
         assertNotNull(viewModel.activeProfile.value)
     }
 
     @Test
-    fun testSimulateInputAdvancesFsmAndLogsTranscript() = runTest {
+    fun testSequentialTransitionsViaSimulateInputAndTranscript() = runTest {
         advanceUntilIdle()
 
         // Send CQ
-        viewModel.simulateInput("CQ")
+        viewModel.simulateInput("CQ CQ DE M7KQX K")
         advanceUntilIdle()
-        assertEquals(QsoState.TransmittingCQ, viewModel.qsoState.value)
-        assertTrue(viewModel.transcript.value.any { it.contains("TX (You): CQ") })
-
-        // Send K
-        viewModel.simulateInput("K")
-        advanceUntilIdle()
-        assertEquals(QsoState.ListeningForCaller, viewModel.qsoState.value)
-        assertTrue(viewModel.transcript.value.any { it.contains("TX (You): K") })
-        // Bot should reply
+        assertEquals(QsoState.InitialResponse, viewModel.qsoState.value)
+        assertTrue(viewModel.transcript.value.any { it.contains("TX (You): CQ CQ DE M7KQX K") })
+        // Bot should transmit initial response
         assertTrue(viewModel.transcript.value.any { it.startsWith("RX") })
-
-        // Send caller callsign
-        viewModel.simulateInput("M7KQX")
-        advanceUntilIdle()
-        assertEquals(QsoState.Exchanging(ExchangeStage.AWAITING_REPORT), viewModel.qsoState.value)
 
         // Send signal report
         viewModel.simulateInput("599")
         advanceUntilIdle()
-        assertEquals(QsoState.Exchanging(ExchangeStage.COMPLETED), viewModel.qsoState.value)
+        assertEquals(QsoState.InfoExchange, viewModel.qsoState.value)
+
+        // Send info ACK
+        viewModel.simulateInput("QSL")
+        advanceUntilIdle()
+        assertEquals(QsoState.SignOff, viewModel.qsoState.value)
     }
 
     @Test

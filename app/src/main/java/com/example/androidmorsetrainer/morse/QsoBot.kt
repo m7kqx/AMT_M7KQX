@@ -191,11 +191,38 @@ class QsoBot(
      */
     fun constructResponse(state: QsoState, userCall: String = userCallsign): String {
         val botCall = currentProfile.callsign
+        val name = currentProfile.name
+        val qth = currentProfile.qth
         return when (state) {
             is QsoState.Idle -> {
                 "CQ CQ DE $botCall K"
             }
 
+            is QsoState.ListenCQ -> {
+                "$botCall DE $userCall K"
+            }
+
+            is QsoState.InitialResponse -> {
+                "$botCall DE $userCall UR RST IS 599 5NN BK"
+            }
+
+            is QsoState.InfoExchange -> {
+                "$botCall DE $userCall QSL TNX NAME $name QTH $qth BK"
+            }
+
+            is QsoState.SignOff -> {
+                "TU FER QSO 73 DE $botCall SK"
+            }
+
+            is QsoState.DitDitFinale -> {
+                "E E"
+            }
+
+            is QsoState.Summary -> {
+                ""
+            }
+
+            // Legacy states for backwards compatibility
             is QsoState.TransmittingCQ -> {
                 "$userCall DE $botCall K"
             }
@@ -225,4 +252,9 @@ class QsoBot(
             }
         }
     }
+
+    /**
+     * Constructs error recovery Morse transmission when incoming CW decode is incomprehensible.
+     */
+    fun constructErrorResponse(): String = "AGN AGN?"
 }

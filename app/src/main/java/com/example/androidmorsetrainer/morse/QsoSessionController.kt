@@ -3,7 +3,12 @@ package com.example.androidmorsetrainer.morse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -12,6 +17,10 @@ import kotlinx.coroutines.launch
 interface DspCharacterStream {
     val characterFlow: Flow<String>
     val stream: Flow<String> get() = characterFlow
+    val toneActivityFlow: Flow<Unit> get() = emptyFlow()
+    val isListening: StateFlow<Boolean> get() = MutableStateFlow(true)
+    fun pauseListening() {}
+    fun resumeListening() {}
 }
 
 /**
@@ -25,8 +34,9 @@ fun interface MorseAudioPlayer {
  * Central integration layer bridging [QsoManager], [QsoBot], [DspCharacterStream],
  * and [MorseAudioPlayer] using Kotlin Coroutines.
  *
- * Scoped purely with kotlinx.coroutines to ensure testability on the JVM and clean
- * cancellation when exiting the practice screen.
+ * Enforces strict half-duplex operation by muting microphone listening during simulated
+ * bot transmissions to prevent full-duplex acoustic feedback and self-decoding.
+ * Manages 5-second silence watchdogs, error recovery transmissions, and Dit-Dit finales.
  */
 class QsoSessionController(
     val qsoManager: QsoManager,
@@ -42,16 +52,41 @@ class QsoSessionController(
 
     private var activeSessionJob: Job? = null
 
+    private val _isMicMuted = MutableStateFlow(false)
+
+    /**
+     * Observable state indicating whether microphone audio input is muted for half-duplex Bot TX.
+     */
+    val isMicMuted: StateFlow<Boolean> = _isMicMuted.asStateFlow()
+
+    /**
+     * Transmits CW audio as the simulated bot while strictly enforcing half-duplex operation.
+     * Pauses DSP listening immediately before synthesis and unpauses immediately after completion.
+     */
+    suspend fun transmitAsBot(text: String, wpm: Int) {
+        _isMicMuted.value = true
+        dspStream.pauseListening()
+        try {
+            audioPlayer.playTransmission(text, wpm)
+        } finally {
+            dspStream.resumeListening()
+            _isMicMuted.value = false
+        }
+    }
+
     /**
      * Coroutine function that runs the practice session lifecycle:
      * - Configures the bot with the provided [botProfile].
      * - Concurrently collects decoded text from [DspCharacterStream] and feeds it into [QsoManager].
-     * - Concurrently collects FSM state updates from [QsoManager.stateFlow].
-     * - Routes state transitions requiring bot action to [QsoBot.constructResponse] and [MorseAudioPlayer.playTransmission].
+     * - Concurrently monitors tone activity to reset 5s silence watchdogs in State 1 and State 5.
+     * - Concurrently collects global error recovery events and transmits "AGN AGN?".
+     * - Concurrently collects Dit-Dit finale events, responds with "E E", and completes the QSO.
+     * - Concurrently collects FSM state updates and triggers half-duplex bot transmissions.
      */
     suspend fun startSession(botProfile: QsoBotProfile) = coroutineScope {
         activeBotProfile = botProfile
         qsoBot.selectProfile(botProfile)
+        qsoManager.activeBotProfile = botProfile
 
         // 1. Concurrently collect incoming DSP characters and inject into QsoManager
         launch {
@@ -60,7 +95,45 @@ class QsoSessionController(
             }
         }
 
-        // 2. Concurrently collect FSM state updates and trigger bot responses on transitions
+        // 2. Silence watchdog coroutine for State 1 and State 5
+        var silenceJob: Job? = null
+
+        fun resetSilenceTimer(delayMs: Long = 5000L) {
+            silenceJob?.cancel()
+            silenceJob = launch {
+                delay(delayMs)
+                qsoManager.onSilenceTimeout()
+            }
+        }
+
+        // Reset silence timer on every detected CW tone activity
+        launch {
+            dspStream.toneActivityFlow.collect {
+                val state = qsoManager.state.value
+                if (state is QsoState.ListenCQ || state is QsoState.DitDitFinale) {
+                    resetSilenceTimer(5000L)
+                }
+            }
+        }
+
+        // 3. Concurrently collect global error recovery triggers and transmit "AGN AGN?"
+        launch {
+            qsoManager.errorRecoveryFlow.collect { errorMessage ->
+                transmitAsBot(errorMessage, botProfile.wpm)
+            }
+        }
+
+        // 4. Concurrently collect Dit-Dit finale event
+        launch {
+            qsoManager.ditDitReceivedFlow.collect {
+                silenceJob?.cancel()
+                transmitAsBot("E E", botProfile.wpm)
+                delay(5000L)
+                qsoManager.completeQso()
+            }
+        }
+
+        // 5. Concurrently collect FSM state updates and trigger bot transmissions on transitions
         launch {
             var previousState: QsoState? = null
 
@@ -68,10 +141,18 @@ class QsoSessionController(
                 val isTransition = previousState != null && previousState != currentState
                 previousState = currentState
 
+                if (currentState is QsoState.DitDitFinale) {
+                    resetSilenceTimer(5000L)
+                } else if (currentState !is QsoState.ListenCQ) {
+                    silenceJob?.cancel()
+                }
+
                 if (isTransition && shouldBotRespond(currentState)) {
-                    val userCall = qsoManager.remoteCallsign ?: qsoBot.userCallsign
+                    val userCall = qsoManager.remoteCallsign ?: qsoManager.userCallsign
                     val responseText = qsoBot.constructResponse(currentState, userCall = userCall)
-                    audioPlayer.playTransmission(responseText, botProfile.wpm)
+                    if (responseText.isNotEmpty()) {
+                        transmitAsBot(responseText, botProfile.wpm)
+                    }
                 }
             }
         }
@@ -91,20 +172,28 @@ class QsoSessionController(
     }
 
     /**
-     * Cleanly cancels the running session coroutines.
+     * Cleanly cancels the running session coroutines and restores listening state.
      */
     fun stopSession() {
         activeSessionJob?.cancel()
         activeSessionJob = null
+        _isMicMuted.value = false
+        dspStream.resumeListening()
     }
 
     /**
      * Determines whether the given [state] requires the bot to synthesize and transmit a response.
      */
-    private fun shouldBotRespond(state: QsoState): Boolean {
+    fun shouldBotRespond(state: QsoState): Boolean {
         return when (state) {
+            is QsoState.InitialResponse -> true
+            is QsoState.InfoExchange -> true
+            is QsoState.SignOff -> true
             is QsoState.ListeningForCaller -> true
             is QsoState.Exchanging -> true
+            is QsoState.ListenCQ -> false
+            is QsoState.DitDitFinale -> false
+            is QsoState.Summary -> false
             is QsoState.LoggingContact -> false
             is QsoState.TransmittingCQ -> false
             is QsoState.Idle -> false

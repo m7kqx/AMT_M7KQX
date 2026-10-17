@@ -46,9 +46,9 @@ class GoertzelDspStreamTest {
     }
 
     @Test
-    fun testEmitManualProducesValueInCharacterFlow() = runTest {
+    fun testEmitManualProducesValueInCharacterFlow() = runTest(testDispatcher) {
         val collected = mutableListOf<String>()
-        val job = launch(testDispatcher) {
+        val job = launch {
             dspStream.characterFlow.collect { collected.add(it) }
         }
         advanceUntilIdle()
@@ -97,9 +97,9 @@ class GoertzelDspStreamTest {
     }
 
     @Test
-    fun testWatchdogEmitsDecodedWordOnKeyingCompletion() = runTest {
+    fun testWatchdogEmitsDecodedWordOnKeyingCompletion() = runTest(testDispatcher) {
         val collected = mutableListOf<String>()
-        val job = launch(testDispatcher) {
+        val job = launch {
             dspStream.characterFlow.collect { collected.add(it) }
         }
         advanceUntilIdle()
@@ -128,6 +128,24 @@ class GoertzelDspStreamTest {
         assertEquals("K", collected.first())
 
         job.cancel()
+    }
+
+    @Test
+    fun testTelemetryReflectsToneDurationsAndTimingEngineAverage() {
+        dspStream.onKeyToneStarted(1000L)
+        dspStream.onKeyToneEnded(durationMs = 80L, timestampMs = 1080L)
+        dspStream.onKeyToneStarted(1180L)
+
+        val telemetry = dspStream.telemetry.value
+        assertEquals(80L, telemetry.lastToneDurationMs)
+        assertEquals(100L, telemetry.lastSilenceDurationMs)
+        assertTrue(telemetry.currentDitAverageMs > 0f)
+    }
+
+    @Test
+    fun testUpdateNoiseFloorUpdatesSquelchThresholdInTelemetry() {
+        dspStream.updateNoiseFloor(0.125f)
+        assertEquals(0.125f, dspStream.telemetry.value.noiseFloorThreshold, 0.001f)
     }
 
     @Test

@@ -3,6 +3,7 @@ package com.example.androidmorsetrainer.ui.navigation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.automirrored.filled.Help
+import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Radio
@@ -17,6 +18,7 @@ enum class NavigationTab(
 ) {
     TRAIN("Train", Icons.Default.School, "Navigate to Training screen"),
     SEND("Send", Icons.Default.Radio, "Navigate to Hardware Keying Send screen"),
+    QSO("QSO", Icons.Default.Headset, "Navigate to QSO Simulator Practice screen"),
     DECODE("Decode", Icons.Default.Hearing, "Navigate to Morse Decoder screen"),
     SETUP("Setup", Icons.Default.Settings, "Navigate to Decoder Setup screen"),
     PROFILES("Profiles", Icons.Default.Person, "Navigate to User Profiles screen"),

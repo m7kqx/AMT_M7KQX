@@ -3,8 +3,13 @@ package com.example.androidmorsetrainer.morse
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -13,27 +18,55 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Mock implementation of [DspCharacterStream] for testing.
+ * Mock implementation of [DspCharacterStream] for testing half-duplex and tone flows.
  */
 class MockDspCharacterStream : DspCharacterStream {
     private val flow = MutableSharedFlow<String>(extraBufferCapacity = 64)
     override val characterFlow: Flow<String> = flow
 
+    private val _toneActivity = MutableSharedFlow<Unit>(extraBufferCapacity = 64)
+    override val toneActivityFlow: Flow<Unit> = _toneActivity.asSharedFlow()
+
+    private val _isListening = MutableStateFlow(true)
+    override val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
+
+    var isPaused = false
+        private set
+
+    override fun pauseListening() {
+        isPaused = true
+        _isListening.value = false
+    }
+
+    override fun resumeListening() {
+        isPaused = false
+        _isListening.value = true
+    }
+
     suspend fun emitInput(text: String) {
+        _toneActivity.emit(Unit)
         flow.emit(text)
+    }
+
+    fun emitToneActivity() {
+        _toneActivity.tryEmit(Unit)
     }
 }
 
 /**
- * Mock implementation of [MorseAudioPlayer] for capturing played transmissions.
+ * Mock implementation of [MorseAudioPlayer] for capturing played transmissions
+ * and verifying half-duplex state during playback.
  */
-class MockMorseAudioPlayer : MorseAudioPlayer {
+class MockMorseAudioPlayer(
+    var onPlayback: (suspend (String, Int) -> Unit)? = null
+) : MorseAudioPlayer {
     data class PlayRecord(val text: String, val wpm: Int)
 
     val history = mutableListOf<PlayRecord>()
 
     override suspend fun playTransmission(text: String, wpm: Int) {
         history.add(PlayRecord(text, wpm))
+        onPlayback?.invoke(text, wpm)
     }
 
     fun clear() {
@@ -42,7 +75,8 @@ class MockMorseAudioPlayer : MorseAudioPlayer {
 }
 
 /**
- * JUnit 4 tests for [QsoSessionController].
+ * JUnit 4 tests for [QsoSessionController] verifying half-duplex muting,
+ * conversational loop, error recovery, and silence watchdogs.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class QsoSessionControllerTest {
@@ -76,123 +110,170 @@ class QsoSessionControllerTest {
     }
 
     @Test
-    fun testInjectingValidCallsignTriggersFsmStateChangeAndBotResponse() = runTest {
-        // Setup FSM in ListeningForCaller state
-        qsoManager.processInput("CQ")
-        qsoManager.processInput("K")
-        assertEquals(QsoState.ListeningForCaller, qsoManager.state.value)
+    fun testHalfDuplexOperationMutesMicrophoneStrictlyDuringTransmission() = runTest {
+        var micWasPausedDuringTx = false
+        var isMicMutedObservedDuringTx = false
 
-        // Clear any prior records before starting session test
-        audioPlayer.clear()
-
-        // Start session in a background coroutine
-        val sessionJob = launch {
-            controller.startSession(testBotProfile)
+        audioPlayer.onPlayback = { _, _ ->
+            micWasPausedDuringTx = dspStream.isPaused
+            isMicMutedObservedDuringTx = controller.isMicMuted.value
         }
-        advanceUntilIdle()
-
-        // Verify initial state before injection
-        assertEquals(QsoState.ListeningForCaller, qsoManager.state.value)
-        assertEquals(0, audioPlayer.history.size)
-
-        // Inject valid callsign "M7KQX" into mock DSP stream
-        dspStream.emitInput("M7KQX")
-        advanceUntilIdle()
-
-        // 1. Verify FSM transitioned to Exchanging(AWAITING_REPORT)
-        assertEquals(QsoState.Exchanging(ExchangeStage.AWAITING_REPORT), qsoManager.state.value)
-        assertEquals("M7KQX", qsoManager.remoteCallsign)
-
-        // 2. Verify mock Audio player played the expected bot response
-        assertEquals("Audio player should have received 1 transmission", 1, audioPlayer.history.size)
-        val record = audioPlayer.history.first()
-        assertEquals("M7KQX DE LZ2BB UR 599 599 BK", record.text)
-        assertEquals(18, record.wpm)
-
-        sessionJob.cancel()
-    }
-
-    @Test
-    fun testFullQsoSequenceViaDspStream() = runTest {
-        // Start in Idle
-        assertEquals(QsoState.Idle, qsoManager.state.value)
 
         val sessionJob = launch {
             controller.startSession(testBotProfile)
         }
-        advanceUntilIdle()
+        runCurrent()
 
-        // 1. User sends CQ -> TransmittingCQ (bot should not play)
-        dspStream.emitInput("CQ")
-        advanceUntilIdle()
-        assertEquals(QsoState.TransmittingCQ, qsoManager.state.value)
-        assertEquals(0, audioPlayer.history.size)
+        try {
+            assertFalse("Mic should not be paused initially", dspStream.isPaused)
+            assertFalse("Controller micMuted should be false initially", controller.isMicMuted.value)
 
-        // 2. User finishes CQ with 'K' -> ListeningForCaller (bot replies to CQ)
-        dspStream.emitInput("K")
-        advanceUntilIdle()
-        assertEquals(QsoState.ListeningForCaller, qsoManager.state.value)
-        assertEquals(1, audioPlayer.history.size)
-        assertEquals("M7KQX DE LZ2BB K", audioPlayer.history.last().text)
+            // Trigger transmission by completing CQ in State 1
+            dspStream.emitInput("CQ CQ DE M7KQX K")
+            runCurrent()
 
-        // 3. Caller callsign received -> Exchanging(AWAITING_REPORT) (bot sends report)
-        dspStream.emitInput("M7KQX")
-        advanceUntilIdle()
-        assertEquals(QsoState.Exchanging(ExchangeStage.AWAITING_REPORT), qsoManager.state.value)
-        assertEquals(2, audioPlayer.history.size)
-        assertEquals("M7KQX DE LZ2BB UR 599 599 BK", audioPlayer.history.last().text)
+            // Verify half-duplex behavior during transmission
+            assertTrue("DSP stream must be paused during bot audio synthesis", micWasPausedDuringTx)
+            assertTrue("Controller isMicMuted must be true during bot audio synthesis", isMicMutedObservedDuringTx)
 
-        // 4. Signal report received -> Exchanging(COMPLETED) (bot sends final sign-off)
-        dspStream.emitInput("599")
-        advanceUntilIdle()
-        assertEquals(QsoState.Exchanging(ExchangeStage.COMPLETED), qsoManager.state.value)
-        assertEquals(3, audioPlayer.history.size)
-        assertEquals("TU 73 DE LZ2BB SK", audioPlayer.history.last().text)
-
-        sessionJob.cancel()
+            // Verify microphone is unmuted immediately after playback finishes
+            assertFalse("DSP stream must resume listening after synthesis ends", dspStream.isPaused)
+            assertFalse("Controller isMicMuted must return to false after synthesis ends", controller.isMicMuted.value)
+        } finally {
+            sessionJob.cancel()
+        }
     }
 
     @Test
-    fun testNoiseDoesNotTriggerBotTransmission() = runTest {
-        qsoManager.processInput("CQ")
-        qsoManager.processInput("K")
-        assertEquals(QsoState.ListeningForCaller, qsoManager.state.value)
-        audioPlayer.clear()
+    fun testFullSequentialLoopViaDspStream() = runTest {
+        assertEquals(QsoState.ListenCQ, qsoManager.state.value)
 
         val sessionJob = launch {
             controller.startSession(testBotProfile)
         }
-        advanceUntilIdle()
+        runCurrent()
 
-        // Inject random noise
-        dspStream.emitInput("ASDFGHJK")
-        advanceUntilIdle()
+        try {
+            // 1. User transmits CQ -> Bot transmits Initial Response
+            dspStream.emitInput("CQ CQ DE M7KQX K")
+            runCurrent()
+            assertEquals(QsoState.InitialResponse, qsoManager.state.value)
+            assertEquals(1, audioPlayer.history.size)
+            assertEquals("LZ2BB DE M7KQX UR RST IS 599 5NN BK", audioPlayer.history.last().text)
 
-        // State remains unchanged and no audio played
-        assertEquals(QsoState.ListeningForCaller, qsoManager.state.value)
-        assertEquals(0, audioPlayer.history.size)
+            // 2. User transmits signal report -> Bot transmits Info Exchange
+            dspStream.emitInput("599")
+            runCurrent()
+            assertEquals(QsoState.InfoExchange, qsoManager.state.value)
+            assertEquals(2, audioPlayer.history.size)
+            assertEquals("LZ2BB DE M7KQX QSL TNX NAME Boyan QTH Sofia BK", audioPlayer.history.last().text)
 
-        sessionJob.cancel()
+            // 3. User transmits info ack -> Bot transmits Sign-Off
+            dspStream.emitInput("QSL")
+            runCurrent()
+            assertEquals(QsoState.SignOff, qsoManager.state.value)
+            assertEquals(3, audioPlayer.history.size)
+            assertEquals("TU FER QSO 73 DE LZ2BB SK", audioPlayer.history.last().text)
+
+            // 4. User transmits 73 -> State moves to DitDitFinale
+            dspStream.emitInput("73")
+            runCurrent()
+            assertEquals(QsoState.DitDitFinale, qsoManager.state.value)
+
+            // 5. User transmits final "E E" -> Bot responds "E E"
+            dspStream.emitInput("E E")
+            runCurrent()
+            assertEquals(4, audioPlayer.history.size)
+            assertEquals("E E", audioPlayer.history.last().text)
+
+            // Advance virtual time by 5s delay -> Transitions to State 6 (Summary)
+            advanceTimeBy(5000L)
+            runCurrent()
+            assertTrue(qsoManager.state.value is QsoState.Summary)
+            val summary = qsoManager.state.value as QsoState.Summary
+            assertEquals("M7KQX", summary.userCallsign)
+            assertEquals("599", summary.userReport)
+        } finally {
+            sessionJob.cancel()
+        }
     }
 
     @Test
-    fun testSessionCancellationStopsProcessing() = runTest {
-        qsoManager.processInput("CQ")
-        qsoManager.processInput("K")
-        audioPlayer.clear()
+    fun testSilenceTimeoutInState1TriggersCqEvaluationAndBotResponse() = runTest {
+        val sessionJob = launch {
+            controller.startSession(testBotProfile)
+        }
+        runCurrent()
 
+        try {
+            // User transmits CQ without K
+            dspStream.emitInput("CQ CQ DE M7KQX")
+            runCurrent()
+            assertEquals(QsoState.ListenCQ, qsoManager.state.value)
+            assertEquals(0, audioPlayer.history.size)
+
+            // Advance time by 5000ms silence
+            advanceTimeBy(5000L)
+            runCurrent()
+
+            // State advances to InitialResponse and Bot transmits initial response
+            assertEquals(QsoState.InitialResponse, qsoManager.state.value)
+            assertEquals(1, audioPlayer.history.size)
+            assertEquals("LZ2BB DE M7KQX UR RST IS 599 5NN BK", audioPlayer.history.first().text)
+        } finally {
+            sessionJob.cancel()
+        }
+    }
+
+    @Test
+    fun testGlobalErrorRecoveryEmitsAgnAgnAndMaintainsState() = runTest {
+        val sessionJob = launch {
+            controller.startSession(testBotProfile)
+        }
+        runCurrent()
+
+        try {
+            // Start in State 1, transmit valid CQ
+            dspStream.emitInput("CQ CQ DE M7KQX K")
+            runCurrent()
+            assertEquals(QsoState.InitialResponse, qsoManager.state.value)
+            audioPlayer.clear()
+
+            // Send incomprehensible input in State 2 (no report)
+            dspStream.emitInput("UNKNOWN GIBBERISH")
+            runCurrent()
+
+            // Bot should transmit error recovery message "AGN AGN?"
+            assertEquals(1, audioPlayer.history.size)
+            assertEquals("AGN AGN?", audioPlayer.history.first().text)
+            // State must remain in InitialResponse
+            assertEquals(QsoState.InitialResponse, qsoManager.state.value)
+
+            // Then send valid report -> advances to InfoExchange
+            dspStream.emitInput("599")
+            runCurrent()
+            assertEquals(QsoState.InfoExchange, qsoManager.state.value)
+        } finally {
+            sessionJob.cancel()
+        }
+    }
+
+    @Test
+    fun testSessionCancellationStopsProcessingAndRestoresListening() = runTest {
         val job = controller.startSession(this, testBotProfile)
-        advanceUntilIdle()
+        runCurrent()
         assertTrue(job.isActive)
 
         // Stop session cleanly
         controller.stopSession()
-        advanceUntilIdle()
+        runCurrent()
         assertFalse(job.isActive)
+        assertFalse(controller.isMicMuted.value)
+        assertFalse(dspStream.isPaused)
 
         // Emitting after cancellation must have no effect
-        dspStream.emitInput("M7KQX")
-        advanceUntilIdle()
+        dspStream.emitInput("CQ CQ DE M7KQX K")
+        runCurrent()
 
         assertEquals(0, audioPlayer.history.size)
     }
