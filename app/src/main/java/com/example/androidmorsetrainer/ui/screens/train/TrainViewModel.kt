@@ -1047,12 +1047,16 @@ class TrainViewModel(
             val currentLevel = currentState.currentLevel
             var advancement: com.example.androidmorsetrainer.morse.AdvancementResult? = null
             var latestCharForLevel = ""
-            if (currentState.selectedTrainingMode == SelectedTrainingMode.FOCUS) {
+            val activeProf = _uiState.value.activeProfile ?: profile
+            if (activeProf.isProgressionPaused) {
+                // Progression is paused: bypass level increment logic but continue writing accuracy data
+                advancement = null
+            } else if (currentState.selectedTrainingMode == SelectedTrainingMode.FOCUS) {
                 // Focus Mode has no level advancement; stays within user-selected characters
                 advancement = null
             } else if (currentState.trainingMode == TrainingMode.Prosigns) {
                  latestCharForLevel = MorseConstants.PROSIGNS_SEQUENCE.getOrNull(currentLevel - 1) ?: ""
-                 val latestStat = getStatResilient(profile.id, latestCharForLevel)
+                 val latestStat = getStatResilient(activeProf.id, latestCharForLevel)
                  val isHintMet = (latestStat?.successfulChallenges ?: 0) >= VISUAL_AID_PROSIGN_SUCCESS_THRESHOLD
                  if (latestStat != null && isHintMet && latestStat.accuracyPercentage >= 90f) {
                      if (currentLevel < MorseConstants.PROSIGNS_SEQUENCE.size) {
@@ -1061,11 +1065,11 @@ class TrainViewModel(
                  }
             } else {
                  latestCharForLevel = kochMethodManager.getLatestCharacterForLevel(currentLevel)
-                 val latestStat = profileRepository.getStatForCharacter(profile.id, latestCharForLevel)
+                 val latestStat = profileRepository.getStatForCharacter(activeProf.id, latestCharForLevel)
                  advancement = kochMethodManager.evaluateAdvancement(currentLevel, latestStat)
             }
 
-            val updatedMastered = loadMasteredCharacters(profile.id)
+            val updatedMastered = loadMasteredCharacters(activeProf.id)
 
             var effectiveLevel = currentLevel
             var activePool = currentState.availableCharacters
@@ -1078,9 +1082,9 @@ class TrainViewModel(
                     advancement.newLevel.coerceIn(kochMethodManager.minLevel, MorseConstants.MAX_KOCH_LEVEL)
                 }
                 val updatedProfile = if (currentState.trainingMode == TrainingMode.Prosigns) {
-                    profile.copy(currentProsignLevel = effectiveLevel)
+                    activeProf.copy(currentProsignLevel = effectiveLevel)
                 } else {
-                    profile.copy(currentKochLevel = effectiveLevel)
+                    activeProf.copy(currentKochLevel = effectiveLevel)
                 }
                 profileRepository.updateProfile(updatedProfile)
                 activePool = getCharactersForMode(currentState.trainingMode, effectiveLevel)
@@ -1153,8 +1157,8 @@ class TrainViewModel(
                 _uiState.update {
                     it.copy(
                         activeProfile = if (advancement != null) {
-                            if (currentState.trainingMode == TrainingMode.Prosigns) profile.copy(currentProsignLevel = effectiveLevel) else profile.copy(currentKochLevel = effectiveLevel)
-                        } else profile,
+                            if (currentState.trainingMode == TrainingMode.Prosigns) activeProf.copy(currentProsignLevel = effectiveLevel) else activeProf.copy(currentKochLevel = effectiveLevel)
+                        } else (_uiState.value.activeProfile ?: activeProf),
                         activeKochLevel = if (currentState.trainingMode == TrainingMode.Koch) effectiveLevel else profile.currentKochLevel,
                         activeProsignLevel = if (currentState.trainingMode == TrainingMode.Prosigns) effectiveLevel else profile.currentProsignLevel,
                         availableCharacters = activePool,
@@ -1189,8 +1193,8 @@ class TrainViewModel(
                 _uiState.update {
                     it.copy(
                         activeProfile = if (advancement != null) {
-                            if (currentState.trainingMode == TrainingMode.Prosigns) profile.copy(currentProsignLevel = effectiveLevel) else profile.copy(currentKochLevel = effectiveLevel)
-                        } else currentState.activeProfile,
+                            if (currentState.trainingMode == TrainingMode.Prosigns) activeProf.copy(currentProsignLevel = effectiveLevel) else activeProf.copy(currentKochLevel = effectiveLevel)
+                        } else (_uiState.value.activeProfile ?: activeProf),
                         activeKochLevel = if (currentState.trainingMode == TrainingMode.Koch) effectiveLevel else (currentState.activeProfile?.currentKochLevel ?: currentState.activeKochLevel),
                         activeProsignLevel = if (currentState.trainingMode == TrainingMode.Prosigns) effectiveLevel else (currentState.activeProfile?.currentProsignLevel ?: currentState.activeProsignLevel),
                         availableCharacters = activePool,
@@ -1237,8 +1241,8 @@ class TrainViewModel(
                 _uiState.update {
                     it.copy(
                         activeProfile = if (advancement != null) {
-                            if (currentState.trainingMode == TrainingMode.Prosigns) profile.copy(currentProsignLevel = effectiveLevel) else profile.copy(currentKochLevel = effectiveLevel)
-                        } else profile,
+                            if (currentState.trainingMode == TrainingMode.Prosigns) activeProf.copy(currentProsignLevel = effectiveLevel) else activeProf.copy(currentKochLevel = effectiveLevel)
+                        } else (_uiState.value.activeProfile ?: activeProf),
                         activeKochLevel = if (currentState.trainingMode == TrainingMode.Koch) effectiveLevel else profile.currentKochLevel,
                         activeProsignLevel = if (currentState.trainingMode == TrainingMode.Prosigns) effectiveLevel else profile.currentProsignLevel,
                         availableCharacters = activePool,
@@ -1721,6 +1725,98 @@ class TrainViewModel(
         if (_uiState.value.activeProfile?.id == profileId) {
             overrideKochLevel(clamped)
         }
+    }
+
+    /**
+     * Toggles the automatic Koch level progression pause state.
+     * When toggling from paused (true) to active (false), immediately evaluates
+     * current performance statistics and triggers a level increment if the accuracy
+     * threshold for the current level has already been met.
+     */
+    fun toggleProgressionPause() {
+        val currentProfile = _uiState.value.activeProfile ?: return
+        val wasPaused = currentProfile.isProgressionPaused
+        val newPaused = !wasPaused
+        val updatedProfile = currentProfile.copy(isProgressionPaused = newPaused)
+
+        _uiState.update { it.copy(activeProfile = updatedProfile) }
+
+        viewModelScope.launch(ioDispatcher) {
+            profileRepository.updateProfile(updatedProfile)
+            if (wasPaused && !newPaused) {
+                evaluateAndTriggerAdvancement(updatedProfile)
+            }
+        }
+    }
+
+    fun toggleProgressionPaused() {
+        toggleProgressionPause()
+    }
+
+    /**
+     * Evaluates current performance statistics for the active level and immediately triggers
+     * a level promotion if the advancement accuracy criteria is met.
+     */
+    suspend fun evaluateAndTriggerAdvancement(profile: UserProfile): Boolean {
+        val currentState = _uiState.value
+        if (currentState.selectedTrainingMode == SelectedTrainingMode.FOCUS) {
+            return false
+        }
+        val isProsigns = currentState.trainingMode == TrainingMode.Prosigns
+        val currentLevel = if (isProsigns) {
+            profile.currentProsignLevel.coerceIn(1, MorseConstants.PROSIGNS_SEQUENCE.size)
+        } else {
+            profile.currentKochLevel.coerceIn(kochMethodManager.minLevel, MorseConstants.MAX_KOCH_LEVEL)
+        }
+
+        val advancement: com.example.androidmorsetrainer.morse.AdvancementResult? = if (isProsigns) {
+            val latestCharForLevel = MorseConstants.PROSIGNS_SEQUENCE.getOrNull(currentLevel - 1) ?: ""
+            val latestStat = getStatResilient(profile.id, latestCharForLevel)
+            val isHintMet = (latestStat?.successfulChallenges ?: 0) >= VISUAL_AID_PROSIGN_SUCCESS_THRESHOLD
+            if (latestStat != null && isHintMet && latestStat.accuracyPercentage >= 90f && currentLevel < MorseConstants.PROSIGNS_SEQUENCE.size) {
+                com.example.androidmorsetrainer.morse.AdvancementResult(
+                    currentLevel + 1,
+                    MorseConstants.PROSIGNS_SEQUENCE[currentLevel],
+                    "Prosigns Level Up: ${MorseConstants.PROSIGNS_SEQUENCE[currentLevel]}"
+                )
+            } else null
+        } else {
+            val latestCharForLevel = kochMethodManager.getLatestCharacterForLevel(currentLevel)
+            val latestStat = profileRepository.getStatForCharacter(profile.id, latestCharForLevel)
+            kochMethodManager.evaluateAdvancement(currentLevel, latestStat)
+        }
+
+        if (advancement != null) {
+            val effectiveLevel = if (isProsigns) {
+                advancement.newLevel.coerceIn(1, MorseConstants.PROSIGNS_SEQUENCE.size)
+            } else {
+                advancement.newLevel.coerceIn(kochMethodManager.minLevel, MorseConstants.MAX_KOCH_LEVEL)
+            }
+            val updatedProfile = if (isProsigns) {
+                profile.copy(currentProsignLevel = effectiveLevel)
+            } else {
+                profile.copy(currentKochLevel = effectiveLevel)
+            }
+            profileRepository.updateProfile(updatedProfile)
+            val activePool = getCharactersForMode(currentState.trainingMode, effectiveLevel)
+            val updatedMastered = loadMasteredCharacters(profile.id)
+
+            _uiState.update { state ->
+                state.copy(
+                    activeProfile = updatedProfile,
+                    activeKochLevel = if (isProsigns) state.activeKochLevel else effectiveLevel,
+                    activeProsignLevel = if (isProsigns) effectiveLevel else state.activeProsignLevel,
+                    availableCharacters = if (state.selectedTrainingMode == SelectedTrainingMode.FOCUS) state.availableCharacters else activePool,
+                    levelUpMessage = advancement.message,
+                    masteredCharacters = updatedMastered,
+                    newlyIntroducedCharacter = advancement.newlyUnlockedCharacter,
+                    newCharacterDotRepresentation = kochMethodManager.getMorseCode(advancement.newlyUnlockedCharacter)
+                )
+            }
+            Log.d(TAG, "Unpaused progression: immediate advancement achieved! ${advancement.message}")
+            return true
+        }
+        return false
     }
 
     /**

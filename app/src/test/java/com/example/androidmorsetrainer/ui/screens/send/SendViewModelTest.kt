@@ -348,9 +348,23 @@ class SendViewModelTest {
         assertTrue(state.availableCharacters.contains("R"))
         assertNotNull(state.levelUpMessage)
         assertTrue(state.levelUpMessage?.contains("Level 2") == true)
+        assertTrue(state.isSessionActive)
+        assertFalse(state.isSessionFinished)
 
         val updatedProfile = profileRepository.getProfileById(testProfile.id)
         assertEquals(2, updatedProfile?.currentKochLevel)
+
+        // Simulating the UI lifecycle / observer re-submitting the updated profile:
+        // Must NOT reset or terminate the active drill!
+        assertNotNull(updatedProfile)
+        viewModel.setActiveProfile(updatedProfile)
+        advanceUntilIdle()
+
+        val stateAfterProfileUpdate = viewModel.uiState.value
+        assertTrue("Session must remain active after profile update", stateAfterProfileUpdate.isSessionActive)
+        assertFalse("Session must not be finished prematurely", stateAfterProfileUpdate.isSessionFinished)
+        assertEquals(2, stateAfterProfileUpdate.activeKochLevel)
+        assertTrue(stateAfterProfileUpdate.availableCharacters.contains("R"))
     }
 
     @Test

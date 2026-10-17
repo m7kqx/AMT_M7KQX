@@ -26,5 +26,8 @@ data class UserProfile(
     val createdAt: Long = System.currentTimeMillis(),
 
     @ColumnInfo(name = "preferred_wpm")
-    val preferredWpm: Int = 20
+    val preferredWpm: Int = 20,
+
+    @ColumnInfo(name = "is_progression_paused", defaultValue = "0")
+    val isProgressionPaused: Boolean = false
 )

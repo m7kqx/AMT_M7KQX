@@ -1,3 +1,7 @@
 <resources>
-    <string name="app_name">M7KQX - CW Bootcamp</string>
+    <string name="app_name">M7KQX CW - Boot Camp</string>
+    <string name="official_app_name">M7KQX CW - Boot Camp</string>
+    <string name="contact_email">m7kqx@m7kqx.co.uk</string>
+    <string name="privacy_policy_label">Privacy Policy</string>
+    <string name="privacy_policy_url">https://www.m7kqx.co.uk/privacy-policy-for-m7kqx-cw-bootcamp/</string>
 </resources>

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -41,6 +42,8 @@ import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.ExpandLess
 import java.text.DateFormat
@@ -96,6 +99,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import android.app.Activity
 import android.view.WindowManager
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import com.example.androidmorsetrainer.MorseTrainerApplication
 import com.example.androidmorsetrainer.audio.MorseDSPManager
@@ -281,6 +285,7 @@ fun TrainScreen(
                         viewModel.startLesson()
                     },
                     onSetWpm = viewModel::setWpm,
+                    onToggleProgressionPause = viewModel::toggleProgressionPause,
                     modifier = modifier
                 )
             }
@@ -551,6 +556,19 @@ fun FocusSelectionKeyboard(
     modifier: Modifier = Modifier,
     keyHeight: androidx.compose.ui.unit.Dp = 44.dp
 ) {
+    val configuration = LocalConfiguration.current
+    val screenHeightDp = configuration.screenHeightDp
+    val effectiveKeyHeight = if (keyHeight == 44.dp) {
+        when {
+            screenHeightDp < 600 -> 30.dp
+            screenHeightDp < 700 -> 34.dp
+            screenHeightDp < 800 -> 38.dp
+            else -> 44.dp
+        }
+    } else keyHeight
+    val rowSpacing = if (screenHeightDp < 700) 4.dp else 6.dp
+    val verticalPadding = if (screenHeightDp < 700) 4.dp else 8.dp
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -560,8 +578,8 @@ fun FocusSelectionKeyboard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(horizontal = 6.dp, vertical = verticalPadding),
+            verticalArrangement = Arrangement.spacedBy(rowSpacing)
         ) {
             // Row 1: 1 through 0 (10 keys, weight 1.0f each)
             Row(
@@ -573,7 +591,7 @@ fun FocusSelectionKeyboard(
                         label = charStr,
                         isSelected = charStr.first() in selectedCharacters,
                         onClick = { onKeyPress(charStr.first()) },
-                        height = keyHeight
+                        height = effectiveKeyHeight
                     )
                 }
             }
@@ -588,7 +606,7 @@ fun FocusSelectionKeyboard(
                         label = charStr,
                         isSelected = charStr.first() in selectedCharacters,
                         onClick = { onKeyPress(charStr.first()) },
-                        height = keyHeight
+                        height = effectiveKeyHeight
                     )
                 }
             }
@@ -604,7 +622,7 @@ fun FocusSelectionKeyboard(
                         label = charStr,
                         isSelected = charStr.first() in selectedCharacters,
                         onClick = { onKeyPress(charStr.first()) },
-                        height = keyHeight
+                        height = effectiveKeyHeight
                     )
                 }
                 Spacer(modifier = Modifier.weight(0.5f))
@@ -621,7 +639,7 @@ fun FocusSelectionKeyboard(
                         label = charStr,
                         isSelected = charStr.first() in selectedCharacters,
                         onClick = { onKeyPress(charStr.first()) },
-                        height = keyHeight
+                        height = effectiveKeyHeight
                     )
                 }
                 Spacer(modifier = Modifier.weight(1.5f))
@@ -637,14 +655,14 @@ fun FocusSelectionKeyboard(
                     isSelected = '?' in selectedCharacters,
                     onClick = { onKeyPress('?') },
                     weight = 1.8f,
-                    height = keyHeight
+                    height = effectiveKeyHeight
                 )
                 FocusKey(
                     label = ",",
                     isSelected = ',' in selectedCharacters,
                     onClick = { onKeyPress(',') },
                     weight = 1.8f,
-                    height = keyHeight
+                    height = effectiveKeyHeight
                 )
                 Spacer(modifier = Modifier.weight(2.8f))
                 FocusKey(
@@ -652,14 +670,14 @@ fun FocusSelectionKeyboard(
                     isSelected = '.' in selectedCharacters,
                     onClick = { onKeyPress('.') },
                     weight = 1.8f,
-                    height = keyHeight
+                    height = effectiveKeyHeight
                 )
                 FocusKey(
                     label = "/",
                     isSelected = '/' in selectedCharacters,
                     onClick = { onKeyPress('/') },
                     weight = 1.8f,
-                    height = keyHeight
+                    height = effectiveKeyHeight
                 )
             }
         }
@@ -2966,8 +2984,19 @@ fun TrainScreenContent(
     modifier: Modifier = Modifier,
     onResetSession: () -> Unit = onQuitDrill,
     onBackspace: () -> Unit = {},
-    onSetWpm: (Int) -> Unit = {}
+    onSetWpm: (Int) -> Unit = {},
+    onToggleProgressionPause: () -> Unit = {}
 ) {
+    val configuration = LocalConfiguration.current
+    val screenHeightDp = configuration.screenHeightDp
+    val dynamicKeyHeight = when {
+        screenHeightDp < 600 -> 30.dp
+        screenHeightDp < 700 -> 34.dp
+        screenHeightDp < 800 -> 38.dp
+        else -> 46.dp
+    }
+    val upperScrollState = rememberScrollState()
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -2978,7 +3007,8 @@ fun TrainScreenContent(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.6f),
+                .weight(1f, fill = false)
+                .verticalScroll(upperScrollState),
             verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Bottom)
         ) {
             // 1. Celebratory Level-Up Banner (if triggered)
@@ -2997,6 +3027,8 @@ fun TrainScreenContent(
                 totalCount = if (uiState.isTimeAttackMode) (uiState.timeAttackCorrectCount + uiState.timeAttackIncorrectCount + uiState.timeAttackMissedCount) else uiState.sessionTotalAttempts,
                 minAttempts = uiState.sessionBatchSize,
                 onQuitDrill = onQuitDrill,
+                onToggleProgressionPause = onToggleProgressionPause,
+                isProgressionPaused = uiState.activeProfile?.isProgressionPaused == true,
                 challengeIndex = uiState.currentChallengeIndex,
                 batchSize = uiState.sessionBatchSize,
                 progressFraction = uiState.progressFraction,
@@ -3054,11 +3086,11 @@ fun TrainScreenContent(
                         text = if (uiState.isTimeAttackMode) {
                             "Time Attack: ${uiState.timeAttackSelectedCharacters.size} characters (${String.format(java.util.Locale.US, "%.1f", uiState.timeAttackResponseWindowSeconds)}s window)"
                         } else if (uiState.trainingMode == TrainingMode.Prosigns) {
-                            "Active characters for Prosigns Level ${uiState.activeProsignLevel}"
+                            "Active characters for Prosigns Level ${uiState.activeProsignLevel}" + if (uiState.activeProfile?.isProgressionPaused == true) " (Paused)" else ""
                         } else if (uiState.isFocusMode) {
                             "Focus practice with ${uiState.focusSelectedCharacters.size} characters"
                         } else {
-                            "Active characters for Koch Level ${uiState.activeKochLevel}"
+                            "Active characters for Koch Level ${uiState.activeKochLevel}" + if (uiState.activeProfile?.isProgressionPaused == true) " (Paused)" else ""
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -3146,7 +3178,7 @@ fun TrainScreenContent(
             label = "challengeTransition",
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.4f)
+                .wrapContentHeight()
                 .padding(bottom = 2.dp)
         ) { _ ->
             KochKeyboard(
@@ -3177,6 +3209,7 @@ fun TrainScreenContent(
                 enabled = uiState.hasTarget && (if (uiState.isTimeAttackMode) uiState.isTimeAttackAwaitingInput else uiState.drillState == DrillState.DrillActive),
                 lastGuessedCharacter = if (uiState.trainingMode == TrainingMode.Prosigns) null else uiState.lastGuessedCharacter,
                 lastGuessWasCorrect = if (uiState.trainingMode == TrainingMode.Prosigns) null else uiState.lastGuessWasCorrect,
+                keyHeight = dynamicKeyHeight,
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -3510,6 +3543,8 @@ private fun ScoreFeedbackCard(
     minAttempts: Int,
     onQuitDrill: () -> Unit,
     modifier: Modifier = Modifier,
+    onToggleProgressionPause: () -> Unit = {},
+    isProgressionPaused: Boolean = false,
     challengeIndex: Int = 0,
     batchSize: Int = 0,
     progressFraction: Float = 0f,
@@ -3627,6 +3662,8 @@ private fun ScoreFeedbackCard(
             // Level-up progress helper
             val progressText = if (isTimeAttack) {
                 "Time Attack: ${String.format(java.util.Locale.US, "%.1f", timeAttackResponseWindowSeconds)}s window • $totalCount of $batchSize complete"
+            } else if (isProgressionPaused) {
+                "Progression paused (level locked) • Accuracy stats are being recorded"
             } else {
                 val attemptsRemaining = (minAttempts - totalCount).coerceAtLeast(0)
                 if (attemptsRemaining > 0) {
@@ -3648,6 +3685,48 @@ private fun ScoreFeedbackCard(
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis
             )
+
+            if (!isTimeAttack) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = onToggleProgressionPause,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isProgressionPaused) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = if (isProgressionPaused) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp, pressedElevation = 4.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(
+                            width = 1.5.dp,
+                            color = if (isProgressionPaused) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = 44.dp)
+                            .semantics {
+                                contentDescription = if (isProgressionPaused) "Progression: Paused" else "Progression: Active"
+                            }
+                    ) {
+                        Icon(
+                            imageVector = if (isProgressionPaused) Icons.Default.Lock else Icons.Default.LockOpen,
+                            contentDescription = null,
+                            tint = if (isProgressionPaused) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isProgressionPaused) "Progression: Paused" else "Progression: Active",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
         }
     }
 }

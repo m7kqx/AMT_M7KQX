@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.androidmorsetrainer.ui.navigation.NavigationTab
@@ -88,7 +89,7 @@ fun MorseTrainerApp(
                                 NavigationTab.DECODE -> "Morse Decoder"
                                 NavigationTab.SETUP -> "Decoder Setup"
                                 NavigationTab.PROFILES -> "User Profiles"
-                                NavigationTab.DEBUG -> "Debug Mode"
+                                NavigationTab.HELP -> "Help"
                             },
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleLarge,
@@ -124,7 +125,14 @@ fun MorseTrainerApp(
                                     contentDescription = tab.contentDescription,
                                 )
                             },
-                            label = { Text(tab.title) },
+                            label = {
+                                Text(
+                                    text = tab.title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    softWrap = false
+                                )
+                            },
                         )
                     }
                 }
@@ -176,8 +184,8 @@ fun MorseTrainerApp(
                     modifier = contentModifier,
                 )
             }
-            NavigationTab.DEBUG -> {
-                com.example.androidmorsetrainer.ui.screens.debug.DebugScreen(
+            NavigationTab.HELP -> {
+                com.example.androidmorsetrainer.ui.screens.debug.HelpScreen(
                     viewModel = debugViewModel,
                     activeProfile = profilesUiState.activeProfile,
                     onKochLevelChange = { newLevel ->

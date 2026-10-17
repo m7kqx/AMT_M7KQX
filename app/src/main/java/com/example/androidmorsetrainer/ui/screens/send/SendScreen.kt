@@ -100,7 +100,7 @@ fun SendScreen(
     }
 
     // Sync active profile from parent Navigation
-    LaunchedEffect(activeProfile?.id, activeProfile?.currentKochLevel) {
+    LaunchedEffect(activeProfile?.id) {
         viewModel.setActiveProfile(activeProfile)
     }
 

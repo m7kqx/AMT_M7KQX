@@ -168,9 +168,25 @@ class SendViewModel(
         }
 
         val currentProfile = _uiState.value.activeProfile
-        if (currentProfile?.id == profile.id && currentProfile.currentKochLevel == profile.currentKochLevel && _uiState.value.isSessionActive) {
-            _uiState.update { it.copy(activeProfile = profile) }
-            return
+        if (currentProfile?.id == profile.id) {
+            // Same profile: If a drill session is currently running,
+            // preserve the active session and do NOT reset to setup mode.
+            if (_uiState.value.isSessionActive) {
+                val level = profile.currentKochLevel
+                val newPool = kochMethodManager.getCharactersForLevel(level)
+                _uiState.update {
+                    it.copy(
+                        activeProfile = profile,
+                        activeKochLevel = level,
+                        availableCharacters = newPool
+                    )
+                }
+                return
+            }
+            if (currentProfile.currentKochLevel == profile.currentKochLevel) {
+                _uiState.update { it.copy(activeProfile = profile) }
+                return
+            }
         }
 
         val level = profile.currentKochLevel

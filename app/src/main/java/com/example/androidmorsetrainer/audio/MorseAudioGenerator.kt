@@ -38,6 +38,7 @@ open class MorseAudioGenerator(
         private const val TAG = "MorseAudioGenerator"
         private const val AMPLITUDE_FACTOR = 0.8
         private const val RAMP_DURATION_SEC = 0.005 // 5ms raised cosine attack/decay to eliminate key clicks
+        const val INITIAL_SILENCE_MS = 10L // 10-15ms zero-amplitude silence buffer to prevent initial DAC clipping
     }
 
     private var audioTrack: AudioTrack? = null
@@ -94,21 +95,32 @@ open class MorseAudioGenerator(
     /**
      * Synthesizes a sine wave PCM buffer of specified duration with raised-cosine (Hann) envelope
      * on the leading and trailing edges to prevent click artifacts.
+     * Injects a zero-amplitude silence buffer (10 to 15 milliseconds of zeroed PCM samples)
+     * at the very beginning of the audio array before the first tone pulse is written to prevent audio clipping.
      */
-    fun generateToneBuffer(durationMs: Long, freq: Int = frequencyHz): ShortArray {
-        val totalSamples = ((sampleRate * durationMs) / 1000.0).toInt().coerceAtLeast(1)
+    @JvmOverloads
+    fun generateToneBuffer(
+        durationMs: Long,
+        freq: Int = frequencyHz,
+        initialSilenceMs: Long = INITIAL_SILENCE_MS
+    ): ShortArray {
+        val silenceSamples = ((sampleRate * initialSilenceMs) / 1000.0).toInt().coerceAtLeast(0)
+        val toneSamples = ((sampleRate * durationMs) / 1000.0).toInt().coerceAtLeast(1)
+        val totalSamples = silenceSamples + toneSamples
         val buffer = ShortArray(totalSamples)
 
         val rampSamples = min(
             (sampleRate * RAMP_DURATION_SEC).toInt(),
-            totalSamples / 2
+            toneSamples / 2
         )
 
         val twoPiF = 2.0 * Math.PI * freq
         val phaseIncrement = twoPiF / sampleRate
         val maxAmp = (Short.MAX_VALUE * AMPLITUDE_FACTOR).toInt()
 
-        for (i in 0 until totalSamples) {
+        // The first silenceSamples in buffer are zero-amplitude (already 0 in ShortArray)
+
+        for (i in 0 until toneSamples) {
             val sineVal = sin(currentPhase)
             currentPhase += phaseIncrement
             if (currentPhase >= 2.0 * Math.PI) {
@@ -120,17 +132,136 @@ open class MorseAudioGenerator(
                 rampSamples > 0 && i < rampSamples -> {
                     0.5 * (1.0 - cos(Math.PI * i / rampSamples))
                 }
-                rampSamples > 0 && i >= totalSamples - rampSamples -> {
-                    val decayIndex = i - (totalSamples - rampSamples)
+                rampSamples > 0 && i >= toneSamples - rampSamples -> {
+                    val decayIndex = i - (toneSamples - rampSamples)
                     0.5 * (1.0 + cos(Math.PI * decayIndex / rampSamples))
                 }
                 else -> 1.0
             }
 
-            buffer[i] = (maxAmp * envelope * sineVal).toInt().toShort()
+            buffer[silenceSamples + i] = (maxAmp * envelope * sineVal).toInt().toShort()
         }
 
         return buffer
+    }
+
+    /**
+     * Synthesizes the audio pulse sequence (16-bit PCM ShortArray) for a given Morse character or prosign.
+     * Injects a small zero-amplitude silence buffer (10 to 15 milliseconds of zeroed PCM samples, calculated
+     * based on the sample rate) at the very beginning of the audio array before the first tone pulse is written.
+     */
+    @JvmOverloads
+    fun generateCharacterBuffer(
+        character: String,
+        speedWpm: Int = wpm,
+        initialSilenceMs: Long = INITIAL_SILENCE_MS,
+        useContinuousProsign: Boolean = false
+    ): ShortArray {
+        val trimmed = character.trim()
+        val isBracketed = trimmed.startsWith("<") && trimmed.endsWith(">") && trimmed.length > 2
+        val clean = if (isBracketed) trimmed.substring(1, trimmed.length - 1).uppercase() else trimmed.uppercase()
+        val letterParts = clean.mapNotNull { MorseConstants.MORSE_MAP[it.toString()] }
+        val isProsign = (isBracketed || clean.length > 1) && letterParts.size == clean.length && letterParts.size > 1
+
+        val pattern = when {
+            isProsign -> if (useContinuousProsign) letterParts.joinToString("") else letterParts.joinToString(" ")
+            MorseConstants.MORSE_MAP.containsKey(trimmed.uppercase()) -> MorseConstants.MORSE_MAP[trimmed.uppercase()] ?: ""
+            letterParts.isNotEmpty() -> letterParts.joinToString(" ")
+            else -> ""
+        }
+
+        return generateMorsePatternBuffer(pattern, speedWpm, initialSilenceMs)
+    }
+
+    @JvmOverloads
+    fun generateCharacterAudio(
+        character: String,
+        speedWpm: Int = wpm,
+        initialSilenceMs: Long = INITIAL_SILENCE_MS,
+        useContinuousProsign: Boolean = false
+    ): ShortArray = generateCharacterBuffer(character, speedWpm, initialSilenceMs, useContinuousProsign)
+
+    @JvmOverloads
+    fun synthesizeCharacterAudio(
+        character: String,
+        speedWpm: Int = wpm,
+        initialSilenceMs: Long = INITIAL_SILENCE_MS,
+        useContinuousProsign: Boolean = false
+    ): ShortArray = generateCharacterBuffer(character, speedWpm, initialSilenceMs, useContinuousProsign)
+
+    @JvmOverloads
+    fun generateMorsePatternBuffer(
+        pattern: String,
+        speedWpm: Int = wpm,
+        initialSilenceMs: Long = INITIAL_SILENCE_MS
+    ): ShortArray {
+        val unitDuration = MorseConstants.calculateUnitDurationMs(speedWpm)
+        val dahDuration = MorseConstants.calculateDahDurationMs(speedWpm)
+        val elementSpace = MorseConstants.calculateElementSpaceMs(speedWpm)
+        val charSpace = MorseConstants.calculateCharacterSpaceMs(speedWpm, farnsworthWpm)
+        val wordSpace = MorseConstants.calculateWordSpaceMs(speedWpm, farnsworthWpm)
+
+        val silenceSamples = ((sampleRate * initialSilenceMs) / 1000.0).toInt().coerceAtLeast(0)
+
+        var totalDurationMs = 0L
+        val parts = pattern.split(" ")
+        for (p in parts.indices) {
+            val part = parts[p]
+            if (part == "/" || part.isEmpty()) {
+                totalDurationMs += wordSpace
+                continue
+            }
+            for (i in part.indices) {
+                totalDurationMs += when (part[i]) {
+                    '-' -> dahDuration
+                    else -> unitDuration
+                }
+                if (i < part.length - 1) {
+                    totalDurationMs += elementSpace
+                }
+            }
+            if (p < parts.size - 1 && parts[p + 1] != "/" && parts[p + 1].isNotEmpty()) {
+                totalDurationMs += charSpace
+            }
+        }
+
+        val toneTotalSamples = ((sampleRate * totalDurationMs) / 1000.0).toInt().coerceAtLeast(1)
+        val totalSamples = silenceSamples + toneTotalSamples
+        val result = ShortArray(totalSamples)
+
+        var writePos = silenceSamples
+        for (p in parts.indices) {
+            val part = parts[p]
+            if (part == "/" || part.isEmpty()) {
+                val silence = generateSilenceBuffer(wordSpace)
+                val len = silence.size.coerceAtMost(result.size - writePos)
+                System.arraycopy(silence, 0, result, writePos, len)
+                writePos += len
+                continue
+            }
+            for (i in part.indices) {
+                val dur = if (part[i] == '-') dahDuration else unitDuration
+                val tone = generateToneBuffer(dur, frequencyHz, initialSilenceMs = 0L)
+                val copyLen = tone.size.coerceAtMost(result.size - writePos)
+                System.arraycopy(tone, 0, result, writePos, copyLen)
+                writePos += copyLen
+
+                if (i < part.length - 1) {
+                    val silence = generateSilenceBuffer(elementSpace)
+                    val silLen = silence.size.coerceAtMost(result.size - writePos)
+                    System.arraycopy(silence, 0, result, writePos, silLen)
+                    writePos += silLen
+                }
+            }
+            if (p < parts.size - 1 && parts[p + 1] != "/" && parts[p + 1].isNotEmpty()) {
+                val silence = generateSilenceBuffer(charSpace)
+                val silLen = silence.size.coerceAtMost(result.size - writePos)
+                System.arraycopy(silence, 0, result, writePos, silLen)
+                writePos += silLen
+            }
+        }
+
+        return result
     }
 
     /**

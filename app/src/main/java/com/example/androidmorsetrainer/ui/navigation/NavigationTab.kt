@@ -2,6 +2,7 @@ package com.example.androidmorsetrainer.ui.navigation
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Radio
@@ -19,7 +20,12 @@ enum class NavigationTab(
     DECODE("Decode", Icons.Default.Hearing, "Navigate to Morse Decoder screen"),
     SETUP("Setup", Icons.Default.Settings, "Navigate to Decoder Setup screen"),
     PROFILES("Profiles", Icons.Default.Person, "Navigate to User Profiles screen"),
-    DEBUG("Debug", Icons.Default.Build, "Navigate to Debug screen")
+    HELP("Help", Icons.AutoMirrored.Filled.Help, "Navigate to Help screen");
+
+    companion object {
+        @Deprecated("Renamed to HELP", ReplaceWith("HELP"))
+        val DEBUG: NavigationTab get() = HELP
+    }
 }
 
 /**
