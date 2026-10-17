@@ -72,14 +72,14 @@ fun HelpScreen(
     }
     val versionCode = remember(packageInfo) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            packageInfo?.longVersionCode?.toString() ?: "12"
+            packageInfo?.longVersionCode?.toString() ?: "13"
         } else {
             @Suppress("DEPRECATION")
-            packageInfo?.versionCode?.toString() ?: "12"
+            packageInfo?.versionCode?.toString() ?: "13"
         }
     }
     val versionName = remember(packageInfo) {
-        packageInfo?.versionName ?: "1.1.0-RC1"
+        packageInfo?.versionName ?: "1.2.0-beta1"
     }
 
     LazyColumn(
