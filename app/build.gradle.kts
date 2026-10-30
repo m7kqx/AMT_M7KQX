@@ -23,7 +23,7 @@ android {
         applicationId = "uk.co.m7kqx.cwbootcamp"
         minSdk = 24
         targetSdk = 37
-        versionCode = 13
+        versionCode = 14
         versionName = "V1.1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -112,4 +112,65 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
-base { archivesName.set("AndroidMorseTrainer-${android.defaultConfig.versionName}") }
+val currentGitBranch = providers.environmentVariable("GITHUB_REF_NAME").orNull
+    ?: runCatching {
+        val headFile = rootProject.file(".git/HEAD")
+        if (headFile.exists()) {
+            val content = headFile.readText().trim()
+            if (content.startsWith("ref: refs/heads/")) {
+                content.removePrefix("ref: refs/heads/").trim()
+            } else {
+                content
+            }
+        } else {
+            "main"
+        }
+    }.getOrNull()
+    ?: "main"
+
+val branchSuffix = when {
+    currentGitBranch in listOf("main", "master") -> "Stable"
+    currentGitBranch == "develop" -> "Dev"
+    currentGitBranch.isNotBlank() && currentGitBranch != "HEAD" -> currentGitBranch.replace(Regex("[^a-zA-Z0-9.-]"), "-")
+    else -> "Stable"
+}
+
+base {
+    archivesName.set("CW-Boot-Camp-${android.defaultConfig.versionName}-$branchSuffix")
+}
+
+abstract class CopyReleaseAabTask : DefaultTask() {
+    @get:InputDirectory
+    abstract val bundleDir: DirectoryProperty
+
+    @get:Input
+    abstract val versionName: Property<String>
+
+    @get:Input
+    abstract val stable: Property<Boolean>
+
+    @TaskAction
+    fun copy() {
+        if (!stable.get()) return
+        val vName = versionName.get()
+        val dir = bundleDir.get().asFile
+        val generatedBundle = dir.listFiles { _, name ->
+            name.startsWith("CW-Boot-Camp-$vName-Stable") && name.endsWith(".aab")
+        }?.firstOrNull { it.name != "CW-Boot-Camp-$vName-Stable.aab" }
+
+        if (generatedBundle != null) {
+            val targetFile = File(dir, "CW-Boot-Camp-$vName-Stable.aab")
+            generatedBundle.copyTo(targetFile, overwrite = true)
+        }
+    }
+}
+
+val copyReleaseAab = tasks.register<CopyReleaseAabTask>("copyReleaseAab") {
+    bundleDir.set(layout.buildDirectory.dir("outputs/bundle/release"))
+    versionName.set(android.defaultConfig.versionName ?: "")
+    stable.set(branchSuffix == "Stable")
+}
+
+tasks.matching { it.name == "bundleRelease" }.configureEach {
+    finalizedBy(copyReleaseAab)
+}

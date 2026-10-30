@@ -72,10 +72,10 @@ fun HelpScreen(
     }
     val versionCode = remember(packageInfo) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            packageInfo?.longVersionCode?.toString() ?: "13"
+            packageInfo?.longVersionCode?.toString() ?: "14"
         } else {
             @Suppress("DEPRECATION")
-            packageInfo?.versionCode?.toString() ?: "13"
+            packageInfo?.versionCode?.toString() ?: "14"
         }
     }
     val versionName = remember(packageInfo) {
