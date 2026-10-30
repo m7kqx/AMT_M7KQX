@@ -49,7 +49,7 @@ class FakeMorseDSPManager : MorseDSPManager(context = null) {
     override fun setTargetFrequency(frequencyHz: Double) {
         lastSetFrequency = frequencyHz
         targetFrequencyHz = frequencyHz
-        fakeDspState.update { it.copy() }
+        fakeDspState.update { it.copy(targetFrequencyHz = frequencyHz) }
     }
 
     override fun setSquelchThreshold(threshold: Double) {
@@ -433,5 +433,39 @@ class SendViewModelTest {
         assertEquals(2, state.currentChallengeIndex)
         assertTrue(state.targetCharacter in listOf("K", "M"))
         assertTrue(state.targetMorsePattern.isNotEmpty())
+    }
+
+    @Test
+    fun dspState_propagatesPitchLockAndFrequencyToSendUiState() = runTest {
+        assertFalse(viewModel.uiState.value.isPitchLocked)
+        assertNull(viewModel.uiState.value.lockedFrequencyHz)
+
+        // When DSP auto-locks onto 650 Hz
+        dspManager.fakeDspState.update {
+            it.copy(
+                isPitchLocked = true,
+                lockedFrequencyHz = 650.0,
+                targetFrequencyHz = 650.0
+            )
+        }
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isPitchLocked)
+        assertEquals(650.0, viewModel.uiState.value.lockedFrequencyHz!!, 0.01)
+        assertEquals(650.0, viewModel.uiState.value.targetFrequencyHz, 0.01)
+
+        // When lock is released after timeout
+        dspManager.fakeDspState.update {
+            it.copy(
+                isPitchLocked = false,
+                lockedFrequencyHz = null,
+                targetFrequencyHz = 650.0
+            )
+        }
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.isPitchLocked)
+        assertNull(viewModel.uiState.value.lockedFrequencyHz)
+        assertEquals(650.0, viewModel.uiState.value.targetFrequencyHz, 0.01)
     }
 }

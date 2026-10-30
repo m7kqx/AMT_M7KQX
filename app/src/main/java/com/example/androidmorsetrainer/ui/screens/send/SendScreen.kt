@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
+import com.example.androidmorsetrainer.ui.theme.SdrPhosphorActive
 import kotlin.math.max
 
 /**
@@ -121,9 +122,6 @@ fun SendScreen(
                     profileName = activeProfile.name,
                     onRequestPermission = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
                     onSelectDrillLength = viewModel::setDrillLength,
-                    onSetFrequency = viewModel::setTargetFrequency,
-                    onSetCustomFrequencyMode = viewModel::setCustomFrequencyMode,
-                    onSetCustomFrequencyString = viewModel::setCustomFrequencyString,
                     onSetSquelch = viewModel::setSquelchLevel,
                     onToggleListening = viewModel::toggleListening,
                     onStartDrill = { viewModel.startLesson(uiState.selectedDrillLength) },
@@ -143,9 +141,6 @@ fun SendScreen(
                     uiState = uiState,
                     onRequestPermission = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
                     onToggleListening = viewModel::toggleListening,
-                    onSetFrequency = viewModel::setTargetFrequency,
-                    onSetCustomFrequencyMode = viewModel::setCustomFrequencyMode,
-                    onSetCustomFrequencyString = viewModel::setCustomFrequencyString,
                     onSetSquelch = viewModel::setSquelchLevel,
                     onClearDecodedText = viewModel::clearDecodedText,
                     onSkipChallenge = viewModel::skipChallenge,
@@ -170,9 +165,6 @@ private fun SendPreDrillSetupContent(
     profileName: String,
     onRequestPermission: () -> Unit,
     onSelectDrillLength: (Int) -> Unit,
-    onSetFrequency: (Double) -> Unit,
-    onSetCustomFrequencyMode: (Boolean) -> Unit,
-    onSetCustomFrequencyString: (String) -> Unit,
     onSetSquelch: (Float) -> Unit,
     onToggleListening: () -> Unit,
     onStartDrill: () -> Unit,
@@ -347,69 +339,27 @@ private fun SendPreDrillSetupContent(
                                 color = if (uiState.isTonePresent) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Pitch: ${uiState.targetFrequencyHz.toInt()} Hz",
+                                text = if (uiState.isPitchLocked) "Pitch: ${uiState.targetFrequencyHz.toInt()} Hz (Locked)"
+                                       else "Pitch: 400–1000 Hz (${uiState.targetFrequencyHz.toInt()} Hz)",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (uiState.isPitchLocked) SdrPhosphorActive else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = if (uiState.isPitchLocked) FontWeight.Bold else FontWeight.Normal
                             )
                         }
                     }
 
-                    // Pitch Selector Dropdown
-                    var expanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-                    val options = listOf(550.0, 600.0, 650.0, 700.0)
-
-                    Column(horizontalAlignment = Alignment.End) {
-                        androidx.compose.material3.ExposedDropdownMenuBox(
-                            expanded = expanded,
-                            onExpandedChange = { expanded = !expanded },
-                            modifier = Modifier.width(130.dp)
-                        ) {
-                            androidx.compose.material3.OutlinedTextField(
-                                value = if (uiState.isCustomFrequency) "Custom" else "${uiState.targetFrequencyHz.toInt()} Hz",
-                                onValueChange = {},
-                                readOnly = true,
-                                trailingIcon = { androidx.compose.material3.ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                                modifier = Modifier.menuAnchor(),
-                                textStyle = MaterialTheme.typography.bodyMedium,
-                                singleLine = true
-                            )
-                            ExposedDropdownMenu(
-                                expanded = expanded,
-                                onDismissRequest = { expanded = false }
-                            ) {
-                                options.forEach { freq ->
-                                    androidx.compose.material3.DropdownMenuItem(
-                                        text = { Text("${freq.toInt()} Hz") },
-                                        onClick = {
-                                            onSetFrequency(freq)
-                                            expanded = false
-                                        }
-                                    )
-                                }
-                                androidx.compose.material3.DropdownMenuItem(
-                                    text = { Text("Custom") },
-                                    onClick = {
-                                        onSetCustomFrequencyMode(true)
-                                        expanded = false
-                                    }
-                                )
-                            }
-                        }
-                        
-                        if (uiState.isCustomFrequency) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            androidx.compose.material3.OutlinedTextField(
-                                value = uiState.customFrequencyString,
-                                onValueChange = onSetCustomFrequencyString,
-                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
-                                ),
-                                modifier = Modifier.width(130.dp),
-                                textStyle = MaterialTheme.typography.bodyMedium,
-                                singleLine = true,
-                                suffix = { Text("Hz", style = MaterialTheme.typography.bodySmall) }
-                            )
-                        }
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (uiState.isPitchLocked) SdrPhosphorActive.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(1.dp, if (uiState.isPitchLocked) SdrPhosphorActive else MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Text(
+                            text = if (uiState.isPitchLocked) "AUTO-LOCKED" else "AUTO-SCAN",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            fontWeight = FontWeight.Bold,
+                            color = if (uiState.isPitchLocked) SdrPhosphorActive else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
                     }
                 }
 
@@ -823,9 +773,6 @@ fun SendScreenContent(
     uiState: SendUiState,
     onRequestPermission: () -> Unit,
     onToggleListening: () -> Unit,
-    onSetFrequency: (Double) -> Unit,
-    onSetCustomFrequencyMode: (Boolean) -> Unit,
-    onSetCustomFrequencyString: (String) -> Unit,
     onSetSquelch: (Float) -> Unit,
     onClearDecodedText: () -> Unit,
     onSkipChallenge: () -> Unit,
@@ -955,13 +902,9 @@ fun SendScreenContent(
             isTonePresent = uiState.isTonePresent,
             isListening = uiState.isListening,
             targetFreqHz = uiState.targetFrequencyHz,
-            isCustomFrequency = uiState.isCustomFrequency,
-            customFrequencyString = uiState.customFrequencyString,
+            isPitchLocked = uiState.isPitchLocked,
             magnitude = uiState.currentMagnitude,
-            threshold = uiState.detectionThreshold,
-            onSetFrequency = onSetFrequency,
-            onSetCustomFrequencyMode = onSetCustomFrequencyMode,
-            onSetCustomFrequencyString = onSetCustomFrequencyString
+            threshold = uiState.detectionThreshold
         )
 
         // 7. Dynamic Squelch Control Slider
@@ -994,19 +937,14 @@ fun SendScreenContent(
 /**
  * High-visibility tone status panel with Red/Green Goertzel detection dot.
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun SendToneDetectorStatusCard(
     isTonePresent: Boolean,
     isListening: Boolean,
     targetFreqHz: Double,
-    isCustomFrequency: Boolean,
-    customFrequencyString: String,
+    isPitchLocked: Boolean = false,
     magnitude: Double,
-    threshold: Double,
-    onSetFrequency: (Double) -> Unit,
-    onSetCustomFrequencyMode: (Boolean) -> Unit,
-    onSetCustomFrequencyString: (String) -> Unit
+    threshold: Double
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1050,69 +988,27 @@ private fun SendToneDetectorStatusCard(
                             color = if (isTonePresent) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Target Sidetone: ${targetFreqHz.toInt()} Hz",
+                            text = if (isPitchLocked) "Target Sidetone: ${targetFreqHz.toInt()} Hz (Locked)"
+                                   else "Target Sidetone: 400–1000 Hz (${targetFreqHz.toInt()} Hz)",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (isPitchLocked) SdrPhosphorActive else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (isPitchLocked) FontWeight.Bold else FontWeight.Normal
                         )
                     }
                 }
 
-                // Quick Pitch Tuning Dropdown
-                var expanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-                val options = listOf(550.0, 600.0, 650.0, 700.0)
-
-                Column(horizontalAlignment = Alignment.End) {
-                    androidx.compose.material3.ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { expanded = !expanded },
-                        modifier = Modifier.width(130.dp)
-                    ) {
-                        androidx.compose.material3.OutlinedTextField(
-                            value = if (isCustomFrequency) "Custom" else "${targetFreqHz.toInt()} Hz",
-                            onValueChange = {},
-                            readOnly = true,
-                            trailingIcon = { androidx.compose.material3.ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                            modifier = Modifier.menuAnchor(),
-                            textStyle = MaterialTheme.typography.bodyMedium,
-                            singleLine = true
-                        )
-                        ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
-                            options.forEach { freq ->
-                                androidx.compose.material3.DropdownMenuItem(
-                                    text = { Text("${freq.toInt()} Hz") },
-                                    onClick = {
-                                        onSetFrequency(freq)
-                                        expanded = false
-                                    }
-                                )
-                            }
-                            androidx.compose.material3.DropdownMenuItem(
-                                text = { Text("Custom") },
-                                onClick = {
-                                    onSetCustomFrequencyMode(true)
-                                    expanded = false
-                                }
-                            )
-                        }
-                    }
-
-                    if (isCustomFrequency) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        androidx.compose.material3.OutlinedTextField(
-                            value = customFrequencyString,
-                            onValueChange = onSetCustomFrequencyString,
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
-                            ),
-                            modifier = Modifier.width(130.dp),
-                            textStyle = MaterialTheme.typography.bodyMedium,
-                            singleLine = true,
-                            suffix = { Text("Hz", style = MaterialTheme.typography.bodySmall) }
-                        )
-                    }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isPitchLocked) SdrPhosphorActive.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, if (isPitchLocked) SdrPhosphorActive else MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Text(
+                        text = if (isPitchLocked) "AUTO-LOCKED" else "AUTO-SCAN",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        fontWeight = FontWeight.Bold,
+                        color = if (isPitchLocked) SdrPhosphorActive else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
             }
 

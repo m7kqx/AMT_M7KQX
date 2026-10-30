@@ -60,6 +60,8 @@ class DecodeViewModel(
             isDecoding = dspManager.dspState.value.isListening,
             hasRecordPermission = dspManager.hasRecordPermission(),
             targetFrequencyHz = dspManager.targetFrequencyHz,
+            isPitchLocked = dspManager.dspState.value.isPitchLocked,
+            lockedFrequencyHz = dspManager.dspState.value.lockedFrequencyHz,
             detectionThreshold = dspManager.squelchThreshold,
             squelchLevel = MorseDSPManager.magnitudeToSquelchLevel(dspManager.squelchThreshold),
             rawAmplitudes = List(MAX_AMPLITUDE_POINTS) { 0.0f },
@@ -107,7 +109,10 @@ class DecodeViewModel(
                         spectralPurity = dsp.spectralPurity,
                         noiseFloor = dsp.noiseFloor,
                         detectionThreshold = dsp.detectionThreshold,
-                        squelchLevel = level
+                        squelchLevel = level,
+                        isPitchLocked = dsp.isPitchLocked,
+                        lockedFrequencyHz = dsp.lockedFrequencyHz,
+                        targetFrequencyHz = dsp.targetFrequencyHz
                     )
                 }
             }
@@ -260,135 +265,6 @@ class DecodeViewModel(
      */
     fun clearDecodedText() {
         decoder.clear()
-    }
-
-    /**
-     * Auto-detects the target CW frequency by capturing a short buffer of microphone audio,
-     * running FFT spectral peak detection within 400Hz - 1000Hz on Dispatchers.Default,
-     * dynamically retuning MorseDSPManager's Goertzel filter to the peak, and updating the UI.
-     */
-    fun autoDetectPitch() {
-        if (!dspManager.hasRecordPermission()) {
-            _uiState.update {
-                it.copy(
-                    hasRecordPermission = false,
-                    userMessage = "Microphone permission is required to auto-detect pitch."
-                )
-            }
-            return
-        }
-
-        if (_uiState.value.isAutoTuning) return
-
-        _uiState.update {
-            it.copy(
-                isAutoTuning = true,
-                userMessage = "Sampling microphone audio for CW pitch..."
-            )
-        }
-
-        viewModelScope.launch(defaultDispatcher) {
-            try {
-                val wasListening = dspManager.dspState.value.isListening
-                if (!wasListening) {
-                    dspManager.startListening()
-                }
-
-                // Capture ~280ms of audio (approx 24 blocks of 512 samples)
-                val chunks = mutableListOf<ShortArray>()
-                withTimeoutOrNull(800) {
-                    dspManager.rawAudioFlow.take(24).collect { buffer ->
-                        chunks.add(buffer)
-                    }
-                }
-
-                if (chunks.isEmpty()) {
-                    _uiState.update {
-                        it.copy(
-                            isAutoTuning = false,
-                            userMessage = "No audio received from microphone."
-                        )
-                    }
-                    return@launch
-                }
-
-                // Flatten captured chunks into a contiguous buffer
-                val totalSamples = chunks.sumOf { it.size }
-                val audioBuffer = ShortArray(totalSamples)
-                var offset = 0
-                for (chunk in chunks) {
-                    System.arraycopy(chunk, 0, audioBuffer, offset, chunk.size)
-                    offset += chunk.size
-                }
-
-                val targetWindowSize = 4096
-                val sampleWindow = if (audioBuffer.size > targetWindowSize) {
-                    extractHighestEnergyWindow(audioBuffer, targetWindowSize)
-                } else {
-                    audioBuffer
-                }
-
-                val result = fftAnalyzer.analyze(
-                    samples = sampleWindow,
-                    sampleRate = dspManager.sampleRate,
-                    minFreqHz = 400.0,
-                    maxFreqHz = 1000.0,
-                    targetFftSize = 4096
-                )
-
-                if (result.isToneDetected) {
-                    val lockedFreq = result.peakFrequencyHz.roundToInt().toDouble()
-                    dspManager.setTargetFrequency(lockedFreq)
-                    _uiState.update {
-                        it.copy(
-                            isAutoTuning = false,
-                            targetFrequencyHz = lockedFreq,
-                            autoTunedFrequencyHz = lockedFreq,
-                            userMessage = "Locked CW pitch to ${lockedFreq.toInt()} Hz (SNR: ${String.format("%.1f", result.snr)}x)"
-                        )
-                    }
-                    Log.d(TAG, "Auto-detected CW pitch: ${lockedFreq}Hz (SNR: ${result.snr})")
-                } else {
-                    _uiState.update {
-                        it.copy(
-                            isAutoTuning = false,
-                            userMessage = "No distinct CW tone found (400–1000 Hz). Please key or play a tone."
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Auto-tune failed: ${e.message}", e)
-                _uiState.update {
-                    it.copy(
-                        isAutoTuning = false,
-                        userMessage = "Pitch auto-detection failed: ${e.message}"
-                    )
-                }
-            }
-        }
-    }
-
-    private fun extractHighestEnergyWindow(audio: ShortArray, windowSize: Int): ShortArray {
-        if (audio.size <= windowSize) return audio
-        val step = 512
-        var bestStart = 0
-        var maxEnergy = -1.0
-
-        var start = 0
-        while (start + windowSize <= audio.size) {
-            var energy = 0.0
-            for (i in start until start + windowSize step 8) {
-                val s = audio[i].toDouble()
-                energy += s * s
-            }
-            if (energy > maxEnergy) {
-                maxEnergy = energy
-                bestStart = start
-            }
-            start += step
-        }
-
-        return audio.copyOfRange(bestStart, bestStart + windowSize)
     }
 
     /**

@@ -79,8 +79,6 @@ fun SetupScreen(
 
     SetupScreenContent(
         uiState = uiState,
-        onSetFrequency = viewModel::setTargetFrequency,
-        onAutoDetectPitch = viewModel::autoDetectPitch,
         onCalibrate = viewModel::calibrateNoiseFloor,
         onDismissMessage = viewModel::clearUserMessage,
         onSquelchChange = viewModel::setSquelchLevel,
@@ -91,8 +89,6 @@ fun SetupScreen(
 @Composable
 fun SetupScreenContent(
     uiState: DecodeUiState,
-    onSetFrequency: (Double) -> Unit,
-    onAutoDetectPitch: () -> Unit,
     onCalibrate: () -> Unit,
     onDismissMessage: () -> Unit,
     onSquelchChange: (Float) -> Unit,
@@ -113,7 +109,7 @@ fun SetupScreenContent(
             exit = fadeOut() + shrinkVertically()
         ) {
             uiState.userMessage?.let { msg ->
-                val isSuccess = uiState.autoTunedFrequencyHz != null && !uiState.isAutoTuning
+                val isSuccess = uiState.isPitchLocked
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
@@ -172,22 +168,18 @@ fun SetupScreenContent(
         SdrTargetFrequencyPanel(
             isTonePresent = uiState.isTonePresent,
             isListening = uiState.isListening,
-            isAutoTuning = uiState.isAutoTuning,
-            autoTunedFrequencyHz = uiState.autoTunedFrequencyHz,
+            isPitchLocked = uiState.isPitchLocked,
             targetFreqHz = uiState.targetFrequencyHz,
             magnitude = uiState.currentMagnitude,
             spectralPurity = uiState.spectralPurity,
             threshold = uiState.detectionThreshold,
-            noiseFloor = uiState.noiseFloor,
-            onSetFrequency = onSetFrequency
+            noiseFloor = uiState.noiseFloor
         )
 
         DecodeCalibrationControls(
             isListening = uiState.isListening,
             isCalibrating = uiState.isCalibrating,
-            isAutoTuning = uiState.isAutoTuning,
-            onCalibrate = onCalibrate,
-            onAutoDetectPitch = onAutoDetectPitch
+            onCalibrate = onCalibrate
         )
 
         SdrSquelchControlCard(
@@ -202,14 +194,12 @@ fun SetupScreenContent(
 fun SdrTargetFrequencyPanel(
     isTonePresent: Boolean,
     isListening: Boolean,
-    isAutoTuning: Boolean = false,
-    autoTunedFrequencyHz: Double? = null,
+    isPitchLocked: Boolean = false,
     targetFreqHz: Double,
     magnitude: Double,
     spectralPurity: Double,
     threshold: Double,
-    noiseFloor: Double,
-    onSetFrequency: (Double) -> Unit
+    noiseFloor: Double
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
@@ -222,16 +212,14 @@ fun SdrTargetFrequencyPanel(
         label = "pulseScale"
     )
 
-    val activeGlowColor = if (isAutoTuning) SdrPhosphorCyan else SdrPhosphorActive
+    val activeGlowColor = if (isPitchLocked) SdrPhosphorActive else SdrPhosphorCyan
     val idleIndicatorColor = Color(0xFF64748B)
 
     val indicatorColor by animateColorAsState(
-        targetValue = if (isTonePresent || isAutoTuning) activeGlowColor else idleIndicatorColor,
+        targetValue = if (isTonePresent || isPitchLocked) activeGlowColor else idleIndicatorColor,
         animationSpec = tween(100),
         label = "indicatorColor"
     )
-
-    val isAutoLocked = autoTunedFrequencyHz != null && targetFreqHz == autoTunedFrequencyHz
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -239,8 +227,8 @@ fun SdrTargetFrequencyPanel(
             containerColor = if (isTonePresent) activeGlowColor.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant
         ),
         border = BorderStroke(
-            width = if (isTonePresent || isAutoLocked) 1.5.dp else 1.dp,
-            color = if (isTonePresent) activeGlowColor else if (isAutoLocked) SdrPhosphorActive.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant
+            width = if (isTonePresent || isPitchLocked) 1.5.dp else 1.dp,
+            color = if (isTonePresent) activeGlowColor else if (isPitchLocked) SdrPhosphorActive.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant
         ),
         shape = RoundedCornerShape(18.dp)
     ) {
@@ -258,7 +246,7 @@ fun SdrTargetFrequencyPanel(
                     Box(
                         modifier = Modifier
                             .size(26.dp)
-                            .then(if (isTonePresent || isAutoTuning) Modifier.scale(pulseScale) else Modifier)
+                            .then(if (isTonePresent || isPitchLocked) Modifier.scale(pulseScale) else Modifier)
                             .clip(CircleShape)
                             .background(indicatorColor),
                         contentAlignment = Alignment.Center
@@ -267,7 +255,7 @@ fun SdrTargetFrequencyPanel(
                             modifier = Modifier
                                 .size(10.dp)
                                 .clip(CircleShape)
-                                .background(if (isTonePresent || isAutoTuning) Color.White else Color(0xFF334155))
+                                .background(if (isTonePresent || isPitchLocked) Color.White else Color(0xFF334155))
                         )
                     }
 
@@ -276,51 +264,37 @@ fun SdrTargetFrequencyPanel(
                     Column {
                         Text(
                             text = when {
-                                isAutoTuning -> "ANALYZING SPECTRUM (FFT)..."
-                                isTonePresent -> "CARRIER LOCKED (CW)"
-                                isListening -> "DSP SEARCHING"
+                                isTonePresent -> "CARRIER DETECTED (CW)"
+                                isPitchLocked -> "PITCH LOCKED"
+                                isListening -> "AUTO-SCANNING SPECTRUM"
                                 else -> "RECEIVER IDLE"
                             },
                             style = MaterialTheme.typography.titleMedium.copy(letterSpacing = 0.5.sp),
                             fontWeight = FontWeight.ExtraBold,
-                            color = if (isTonePresent) SdrPhosphorActive else if (isAutoTuning) SdrPhosphorCyan else MaterialTheme.colorScheme.onSurface
+                            color = if (isTonePresent || isPitchLocked) SdrPhosphorActive else MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Target Sidetone: ${targetFreqHz.toInt()} Hz" + if (isAutoLocked) " • Auto-Locked" else "",
+                            text = if (isPitchLocked) "Locked Sidetone: ${targetFreqHz.toInt()} Hz • Auto-Tracking"
+                                   else "Scanning: 400–1000 Hz (Current: ${targetFreqHz.toInt()} Hz)",
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (isAutoLocked) SdrPhosphorActive else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (isAutoLocked) FontWeight.Bold else FontWeight.Normal
+                            color = if (isPitchLocked) SdrPhosphorActive else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (isPitchLocked) FontWeight.Bold else FontWeight.Normal
                         )
                     }
                 }
 
-                val baseFreqs = listOf(550.0, 600.0, 650.0, 700.0)
-                val displayFreqs = if (autoTunedFrequencyHz != null && autoTunedFrequencyHz !in baseFreqs) {
-                    baseFreqs + autoTunedFrequencyHz
-                } else {
-                    baseFreqs
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    displayFreqs.forEach { freq ->
-                        val isSelected = targetFreqHz == freq
-                        val isThisAuto = autoTunedFrequencyHz != null && freq == autoTunedFrequencyHz
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { onSetFrequency(freq) },
-                            label = {
-                                Text(
-                                    text = if (isThisAuto) "${freq.toInt()}Hz ★" else "${freq.toInt()}Hz",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = if (isThisAuto) SdrPhosphorActive.copy(alpha = 0.25f) else MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = if (isThisAuto) SdrPhosphorActive else MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        )
-                    }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isPitchLocked) SdrPhosphorActive.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, if (isPitchLocked) SdrPhosphorActive else MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Text(
+                        text = if (isPitchLocked) "AUTO-LOCKED" else "AUTO-SCAN",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        fontWeight = FontWeight.Bold,
+                        color = if (isPitchLocked) SdrPhosphorActive else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
             }
 
@@ -385,81 +359,44 @@ fun MetricChip(label: String, value: String) {
 fun DecodeCalibrationControls(
     isListening: Boolean,
     isCalibrating: Boolean,
-    isAutoTuning: Boolean,
-    onCalibrate: () -> Unit,
-    onAutoDetectPitch: () -> Unit
+    onCalibrate: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    Button(
+        onClick = onCalibrate,
+        enabled = isListening && !isCalibrating,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(50.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+        )
     ) {
-        Button(
-            onClick = onAutoDetectPitch,
-            enabled = !isAutoTuning && !isCalibrating,
-            modifier = Modifier
-                .weight(1.1f)
-                .height(50.dp),
-            shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+        if (isCalibrating) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
             )
-        ) {
-            if (isAutoTuning) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Detecting...",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.AutoFixHigh,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Auto-Detect Pitch",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-
-        OutlinedButton(
-            onClick = onCalibrate,
-            enabled = isListening && !isCalibrating && !isAutoTuning,
-            modifier = Modifier
-                .weight(0.9f)
-                .height(50.dp),
-            shape = RoundedCornerShape(14.dp)
-        ) {
-            if (isCalibrating) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    strokeWidth = 2.dp
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Calibrating...", style = MaterialTheme.typography.labelSmall)
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Calibrate",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Calibrating Ambient Noise...",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.Tune,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Calibrate Ambient Noise Floor",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }

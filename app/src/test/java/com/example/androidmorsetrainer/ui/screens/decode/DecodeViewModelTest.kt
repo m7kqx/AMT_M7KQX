@@ -21,6 +21,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -44,7 +45,7 @@ class FakeMorseDSPManager : MorseDSPManager(context = null) {
     override fun setTargetFrequency(frequencyHz: Double) {
         lastSetFrequency = frequencyHz
         targetFrequencyHz = frequencyHz
-        fakeDspState.update { it.copy() }
+        fakeDspState.update { it.copy(targetFrequencyHz = frequencyHz) }
     }
 
     override fun startListening() {
@@ -206,73 +207,52 @@ class DecodeViewModelTest {
     }
 
     @Test
-    fun autoDetectPitch_whenPermissionDenied_showsErrorMessage() = runTest(testDispatcher) {
-        fakeDspManager.hasPermission = false
-        viewModel.autoDetectPitch()
+    fun dspState_propagatesAutomaticPitchLockAndFrequency() = runTest(testDispatcher) {
+        // Initially not locked
+        assertFalse(viewModel.uiState.value.isPitchLocked)
+        assertNull(viewModel.uiState.value.lockedFrequencyHz)
+
+        // When DSP detects and locks onto CW tone
+        fakeDspManager.fakeDspState.update {
+            it.copy(
+                isPitchLocked = true,
+                lockedFrequencyHz = 640.0,
+                targetFrequencyHz = 640.0
+            )
+        }
         advanceUntilIdle()
 
-        assertFalse(viewModel.uiState.value.isAutoTuning)
-        assertNotNull(viewModel.uiState.value.userMessage)
-        assertTrue(viewModel.uiState.value.userMessage!!.contains("permission", ignoreCase = true))
+        assertTrue(viewModel.uiState.value.isPitchLocked)
+        assertEquals(640.0, viewModel.uiState.value.lockedFrequencyHz!!, 0.01)
+        assertEquals(640.0, viewModel.uiState.value.targetFrequencyHz, 0.01)
     }
 
     @Test
-    fun autoDetectPitch_whenSineWaveAudioStreamed_detectsAndLocksFrequency() = runTest(testDispatcher) {
-        fakeDspManager.hasPermission = true
-
-        // Launch auto-detect
-        viewModel.autoDetectPitch()
-        assertTrue(viewModel.uiState.value.isAutoTuning)
-
-        // Advance coroutine so collection on rawAudioFlow is active
-        runCurrent()
-
-        // Generate 24 buffers of 512 samples with 750 Hz tone
-        val sampleRate = 44100
-        val freq = 750.0
-        var sampleIndex = 0
-        for (b in 0 until 24) {
-            val chunk = ShortArray(512) {
-                val angle = 2.0 * Math.PI * freq * (sampleIndex++) / sampleRate
-                (0.5 * Short.MAX_VALUE * kotlin.math.sin(angle)).toInt().toShort()
-            }
-            fakeDspManager.fakeRawAudio.emit(chunk)
-            runCurrent()
+    fun dspState_propagatesPitchLockReleaseAfterTimeout() = runTest(testDispatcher) {
+        // Lock on first
+        fakeDspManager.fakeDspState.update {
+            it.copy(
+                isPitchLocked = true,
+                lockedFrequencyHz = 550.0,
+                targetFrequencyHz = 550.0
+            )
         }
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.isPitchLocked)
 
+        // Lock released after signal loss timeout
+        fakeDspManager.fakeDspState.update {
+            it.copy(
+                isPitchLocked = false,
+                lockedFrequencyHz = null,
+                targetFrequencyHz = 550.0
+            )
+        }
         advanceUntilIdle()
 
-        assertFalse(viewModel.uiState.value.isAutoTuning)
-        assertEquals(750.0, viewModel.uiState.value.targetFrequencyHz, 2.0)
-        assertEquals(750.0, viewModel.uiState.value.autoTunedFrequencyHz!!, 2.0)
-        assertEquals(750.0, fakeDspManager.lastSetFrequency, 2.0)
-        assertNotNull(viewModel.uiState.value.userMessage)
-        assertTrue(viewModel.uiState.value.userMessage!!.contains("Locked CW pitch to"))
-    }
-
-    @Test
-    fun autoDetectPitch_whenSilenceStreamed_reportsNoTone() = runTest(testDispatcher) {
-        fakeDspManager.hasPermission = true
-
-        viewModel.autoDetectPitch()
-        assertTrue(viewModel.uiState.value.isAutoTuning)
-
-        // Advance coroutine so collection on rawAudioFlow is active
-        runCurrent()
-
-        // Stream 24 buffers of pure silence
-        for (b in 0 until 24) {
-            fakeDspManager.fakeRawAudio.emit(ShortArray(512) { 0 })
-            runCurrent()
-        }
-
-        advanceUntilIdle()
-
-        assertFalse(viewModel.uiState.value.isAutoTuning)
-        // Target frequency should remain unchanged (default 700.0)
-        assertEquals(700.0, viewModel.uiState.value.targetFrequencyHz, 0.01)
-        assertNotNull(viewModel.uiState.value.userMessage)
-        assertTrue(viewModel.uiState.value.userMessage!!.contains("No distinct CW tone found"))
+        assertFalse(viewModel.uiState.value.isPitchLocked)
+        assertNull(viewModel.uiState.value.lockedFrequencyHz)
+        assertEquals(550.0, viewModel.uiState.value.targetFrequencyHz, 0.01)
     }
 
     @Test

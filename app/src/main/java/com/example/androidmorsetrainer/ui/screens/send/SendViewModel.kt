@@ -64,6 +64,8 @@ class SendViewModel(
         SendUiState(
             hasRecordPermission = dspManager.hasRecordPermission(),
             targetFrequencyHz = dspManager.targetFrequencyHz,
+            isPitchLocked = dspManager.dspState.value.isPitchLocked,
+            lockedFrequencyHz = dspManager.dspState.value.lockedFrequencyHz,
             detectionThreshold = dspManager.squelchThreshold,
             squelchLevel = MorseDSPManager.magnitudeToSquelchLevel(dspManager.squelchThreshold),
             selectedDrillLength = sessionBatchSize,
@@ -104,7 +106,10 @@ class SendViewModel(
                         isTonePresent = dsp.isTonePresent,
                         currentMagnitude = dsp.currentMagnitude,
                         detectionThreshold = dsp.detectionThreshold,
-                        squelchLevel = level
+                        squelchLevel = level,
+                        targetFrequencyHz = dsp.targetFrequencyHz,
+                        isPitchLocked = dsp.isPitchLocked,
+                        lockedFrequencyHz = dsp.lockedFrequencyHz
                     )
                 }
             }

@@ -23,8 +23,8 @@ android {
         applicationId = "uk.co.m7kqx.cwbootcamp"
         minSdk = 24
         targetSdk = 37
-        versionCode = 12
-        versionName = "1.1.0-RC1"
+        versionCode = 13
+        versionName = "V1.1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

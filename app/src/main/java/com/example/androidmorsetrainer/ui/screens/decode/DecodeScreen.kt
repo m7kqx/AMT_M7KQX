@@ -135,7 +135,6 @@ fun DecodeScreen(
         onRequestPermission = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
         onToggleListening = viewModel::toggleListening,
         onClearText = viewModel::clearDecodedText,
-        onAutoDetectPitch = viewModel::autoDetectPitch,
         modifier = modifier
     )
 }
@@ -146,7 +145,6 @@ fun DecodeScreenContent(
     onRequestPermission: () -> Unit,
     onToggleListening: () -> Unit,
     onClearText: () -> Unit,
-    onAutoDetectPitch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -165,7 +163,8 @@ fun DecodeScreenContent(
             detectionThreshold = uiState.detectionThreshold,
             noiseFloor = uiState.noiseFloor,
             isListening = uiState.isListening,
-            targetFreqHz = uiState.targetFrequencyHz
+            targetFreqHz = uiState.targetFrequencyHz,
+            isPitchLocked = uiState.isPitchLocked
         )
 
         DecodedTeletypeCard(
@@ -179,9 +178,7 @@ fun DecodeScreenContent(
 
         DecodeControlsToolbar(
             isListening = uiState.isListening,
-            isAutoTuning = uiState.isAutoTuning,
-            onToggleListening = onToggleListening,
-            onAutoDetectPitch = onAutoDetectPitch
+            onToggleListening = onToggleListening
         )
     }
 }
@@ -194,6 +191,7 @@ private fun SdrOscilloscopeCard(
     noiseFloor: Double,
     isListening: Boolean,
     targetFreqHz: Double,
+    isPitchLocked: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -252,12 +250,13 @@ private fun SdrOscilloscopeCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "TIME/DIV: 12ms • FC: ${targetFreqHz.toInt()}Hz",
+                    text = if (isPitchLocked) "TIME/DIV: 12ms • FC: ${targetFreqHz.toInt()}Hz [LOCKED]"
+                           else "TIME/DIV: 12ms • FC: ${targetFreqHz.toInt()}Hz [AUTO-SCAN]",
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp
                     ),
-                    color = Color(0xFF64748B)
+                    color = if (isPitchLocked) SdrPhosphorCyan else Color(0xFF64748B)
                 )
                 Text(
                     text = "THR: ${String.format("%.3f", detectionThreshold)} • NF: ${String.format("%.3f", noiseFloor)}",
@@ -511,69 +510,28 @@ private fun DecodedTeletypeCard(
 @Composable
 private fun DecodeControlsToolbar(
     isListening: Boolean,
-    isAutoTuning: Boolean,
-    onToggleListening: () -> Unit,
-    onAutoDetectPitch: () -> Unit
+    onToggleListening: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically
+    Button(
+        onClick = onToggleListening,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(54.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (isListening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+        )
     ) {
-        Button(
-            onClick = onAutoDetectPitch,
-            enabled = !isAutoTuning,
-            modifier = Modifier
-                .weight(1f)
-                .height(54.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-            )
-        ) {
-            if (isAutoTuning) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.AutoFixHigh,
-                    contentDescription = "Auto-Detect Tone",
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Auto Tune",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        Button(
-            onClick = onToggleListening,
-            modifier = Modifier
-                .weight(1f)
-                .height(54.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (isListening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-            )
-        ) {
-            Icon(
-                imageVector = if (isListening) Icons.Default.MicOff else Icons.Default.Mic,
-                contentDescription = null
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = if (isListening) "Stop Rx" else "Start Rx",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-        }
+        Icon(
+            imageVector = if (isListening) Icons.Default.MicOff else Icons.Default.Mic,
+            contentDescription = null
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = if (isListening) "Stop Rx" else "Start Rx",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 

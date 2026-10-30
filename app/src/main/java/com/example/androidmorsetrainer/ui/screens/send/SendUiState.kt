@@ -25,6 +25,8 @@ data class SendUiState(
     val availableCharacters: List<String> = emptyList(),
     val isListening: Boolean = false,
     val isTonePresent: Boolean = false,
+    val isPitchLocked: Boolean = false,
+    val lockedFrequencyHz: Double? = null,
     val targetFrequencyHz: Double = 700.0,
     val isCustomFrequency: Boolean = false,
     val customFrequencyString: String = "700",
