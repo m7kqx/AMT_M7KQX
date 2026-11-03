@@ -5,6 +5,7 @@
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack_Compose_Material_3-4285F4.svg?style=flat&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Architecture](https://img.shields.io/badge/Architecture-Clean_UDF_MVVM-blue.svg?style=flat)](https://developer.android.com/topic/architecture)
 [![Room](https://img.shields.io/badge/Database-Room_KSP-orange.svg?style=flat)](https://developer.android.com/training/data-storage/room)
+[![Version](https://img.shields.io/badge/Version-V1.1.0.2_(15)-brightgreen.svg?style=flat)](app/build.gradle.kts)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg?style=flat)](LICENSE)
 
 **M7KQX - CW Bootcamp** is an open-source, high-performance Android application engineered for amateur radio (ham radio) operators, commercial telegraphers, and Morse code enthusiasts. Built with **Jetpack Compose**, **Material 3**, and an ultra-low-latency **Digital Signal Processing (DSP)** engine, CW Bootcamp supports both **receiving** (ear training) and **sending** (hardware keying practice) using standard international CW specifications.
@@ -29,6 +30,7 @@
 - [Building & Installation](#building--installation)
 - [Permissions](#permissions)
 - [Testing](#testing)
+- [Release Notes & Recent Changes](#release-notes--recent-changes)
 - [License](#license)
 
 ---
@@ -259,6 +261,17 @@ The project includes unit test suites covering the core domain, DSP algorithms, 
 - [`FFTAnalyzerTest`](app/src/test/java/com/example/androidmorsetrainer/audio/FFTAnalyzerTest.kt): Verifies frequency peak resolution and SNR computation.
 - [`SendViewModelTest`](app/src/test/java/com/example/androidmorsetrainer/ui/screens/send/SendViewModelTest.kt): Tests Goertzel event forwarding, verification matching, squelch changes, and Koch promotion logic.
 - [`TrainViewModelTest`](app/src/test/java/com/example/androidmorsetrainer/ui/screens/train/TrainViewModelTest.kt): Tests adaptive weighting updates, attempt tracking, and lesson dialog states.
+
+---
+
+## Release Notes & Recent Changes
+
+### Version 1.1.0.2 (Build 15) — November 3, 2026
+
+- **DSP Squelch & Pitch Retention:** Persisted Goertzel squelch threshold, ambient noise floor, and target frequency in `SharedPreferences` and [`ProfileRepository`](app/src/main/java/com/example/androidmorsetrainer/data/repository/ProfileRepository.kt) across all screens ([`SetupScreen`](app/src/main/java/com/example/androidmorsetrainer/ui/screens/decode/SetupScreen.kt), [`DecodeViewModel`](app/src/main/java/com/example/androidmorsetrainer/ui/screens/decode/DecodeViewModel.kt), and [`SendViewModel`](app/src/main/java/com/example/androidmorsetrainer/ui/screens/send/SendViewModel.kt)).
+- **Profile Resilience:** Calibrated squelch thresholds and tone settings are now retained when switching or updating operator profiles, preventing calibration resets during practice sessions.
+- **Setup Screen Audio Workflow:** Listening automatically starts when opening the Setup dialog, and noise floor calibration seamlessly persists to active decoding sessions.
+- **Expanded Unit Testing:** Added comprehensive test coverage in [`DecodeViewModelTest`](app/src/test/java/com/example/androidmorsetrainer/ui/screens/decode/DecodeViewModelTest.kt) and [`SendViewModelTest`](app/src/test/java/com/example/androidmorsetrainer/ui/screens/send/SendViewModelTest.kt) covering squelch calibration retention, frequency preservation, and lifecycle event transitions.
 
 ---
 
