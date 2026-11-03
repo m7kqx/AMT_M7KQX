@@ -55,6 +55,17 @@ open class MorseDSPManager(
         private set
 
     @Volatile
+    var noiseFloor: Double = DEFAULT_NOISE_FLOOR
+        private set
+
+    @Volatile
+    var retainedLockedFrequencyHz: Double? = null
+        private set
+
+    @Volatile
+    private var lastStartListeningCallMs: Long = 0L
+
+    @Volatile
     open var isDecodingActive: Boolean = false
         set(value) {
             field = value
@@ -71,6 +82,13 @@ open class MorseDSPManager(
 
     companion object {
         private const val TAG = "MorseDSP"
+        private const val PREFS_NAME = "morse_dsp_settings"
+        private const val KEY_SQUELCH_THRESHOLD = "squelch_threshold"
+        private const val KEY_TARGET_FREQ_HZ = "target_freq_hz"
+        private const val KEY_NOISE_FLOOR = "noise_floor"
+        private const val KEY_IS_PITCH_LOCKED = "is_pitch_locked"
+        private const val KEY_LOCKED_FREQ_HZ = "locked_freq_hz"
+
         const val DEFAULT_NOISE_FLOOR = 0.02
         const val DEFAULT_THRESHOLD = 0.05
         const val MIN_SQUELCH_MAGNITUDE = 0.005
@@ -150,7 +168,13 @@ open class MorseDSPManager(
         val timestampMs: Long
     )
 
-    private val _dspState = MutableStateFlow(DSPState())
+    private val _dspState = MutableStateFlow(
+        DSPState(
+            noiseFloor = noiseFloor,
+            detectionThreshold = squelchThreshold,
+            targetFrequencyHz = targetFrequencyHz
+        )
+    )
     open val dspState: StateFlow<DSPState> = _dspState.asStateFlow()
 
     private val _toneEvents = MutableSharedFlow<ToneEvent>(extraBufferCapacity = 64)
@@ -179,6 +203,81 @@ open class MorseDSPManager(
     private var toneStartTime = 0L
     private var silenceStartTime = 0L
 
+    init {
+        loadSavedSettings()
+    }
+
+    /**
+     * Loads persisted squelch and tone settings from SharedPreferences if context is available.
+     */
+    open fun loadSavedSettings() {
+        val ctx = context ?: return
+        try {
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (prefs.contains(KEY_SQUELCH_THRESHOLD)) {
+                val savedThreshold = prefs.getFloat(KEY_SQUELCH_THRESHOLD, squelchThreshold.toFloat()).toDouble()
+                    .coerceIn(MIN_SQUELCH_MAGNITUDE, MAX_SQUELCH_MAGNITUDE)
+                squelchThreshold = savedThreshold
+                goertzelDetector.setSquelchThreshold(savedThreshold)
+            }
+            if (prefs.contains(KEY_TARGET_FREQ_HZ)) {
+                val savedFreq = prefs.getFloat(KEY_TARGET_FREQ_HZ, targetFrequencyHz.toFloat()).toDouble()
+                    .coerceIn(MIN_CW_FREQ, MAX_CW_FREQ)
+                targetFrequencyHz = savedFreq
+                goertzelDetector.setTargetFrequency(savedFreq)
+            }
+            if (prefs.contains(KEY_NOISE_FLOOR)) {
+                noiseFloor = prefs.getFloat(KEY_NOISE_FLOOR, noiseFloor.toFloat()).toDouble()
+            }
+            val wasLocked = prefs.getBoolean(KEY_IS_PITCH_LOCKED, false)
+            if (wasLocked && prefs.contains(KEY_LOCKED_FREQ_HZ)) {
+                val lockedFreq = prefs.getFloat(KEY_LOCKED_FREQ_HZ, targetFrequencyHz.toFloat()).toDouble()
+                    .coerceIn(MIN_CW_FREQ, MAX_CW_FREQ)
+                targetFrequencyHz = lockedFreq
+                retainedLockedFrequencyHz = lockedFreq
+                goertzelDetector.setTargetFrequency(lockedFreq)
+                pitchLockState = PitchLockState.LOCKED
+            }
+            _dspState.update {
+                it.copy(
+                    detectionThreshold = squelchThreshold,
+                    targetFrequencyHz = targetFrequencyHz,
+                    noiseFloor = noiseFloor,
+                    isPitchLocked = (pitchLockState == PitchLockState.LOCKED),
+                    lockedFrequencyHz = if (pitchLockState == PitchLockState.LOCKED) targetFrequencyHz else null
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to load DSP settings: ${e.message}")
+        }
+    }
+
+    /**
+     * Persists current squelch and tone settings to SharedPreferences if context is available.
+     */
+    open fun saveSettings() {
+        val ctx = context ?: return
+        try {
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val isLocked = pitchLockState == PitchLockState.LOCKED || retainedLockedFrequencyHz != null
+            val lockedFreq = retainedLockedFrequencyHz ?: if (pitchLockState == PitchLockState.LOCKED) targetFrequencyHz else null
+            prefs.edit().apply {
+                putFloat(KEY_SQUELCH_THRESHOLD, squelchThreshold.toFloat())
+                putFloat(KEY_TARGET_FREQ_HZ, targetFrequencyHz.toFloat())
+                putFloat(KEY_NOISE_FLOOR, noiseFloor.toFloat())
+                putBoolean(KEY_IS_PITCH_LOCKED, isLocked)
+                if (lockedFreq != null) {
+                    putFloat(KEY_LOCKED_FREQ_HZ, lockedFreq.toFloat())
+                } else {
+                    remove(KEY_LOCKED_FREQ_HZ)
+                }
+                apply()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to save DSP settings: ${e.message}")
+        }
+    }
+
     /**
      * Updates the target detection frequency (e.g. 600Hz - 800Hz).
      */
@@ -186,6 +285,7 @@ open class MorseDSPManager(
         targetFrequencyHz = frequencyHz
         goertzelDetector.setTargetFrequency(frequencyHz)
         _dspState.update { it.copy(targetFrequencyHz = frequencyHz) }
+        saveSettings()
         Log.d(TAG, "Target frequency updated to ${frequencyHz}Hz")
     }
 
@@ -194,8 +294,10 @@ open class MorseDSPManager(
      */
     open fun lockOnFrequency(frequencyHz: Double) {
         targetFrequencyHz = frequencyHz
+        retainedLockedFrequencyHz = frequencyHz
         goertzelDetector.setTargetFrequency(frequencyHz)
         pitchLockState = PitchLockState.LOCKED
+        lastToneSeenTimeMs = System.currentTimeMillis()
         _dspState.update {
             it.copy(
                 isPitchLocked = true,
@@ -203,6 +305,7 @@ open class MorseDSPManager(
                 targetFrequencyHz = frequencyHz
             )
         }
+        saveSettings()
         Log.d(TAG, "Pitch locked on ${frequencyHz}Hz")
     }
 
@@ -211,12 +314,14 @@ open class MorseDSPManager(
      */
     open fun releaseFrequencyLock() {
         pitchLockState = PitchLockState.SEARCHING
+        retainedLockedFrequencyHz = null
         _dspState.update {
             it.copy(
                 isPitchLocked = false,
                 lockedFrequencyHz = null
             )
         }
+        saveSettings()
         Log.d(TAG, "Pitch lock released. Resuming search.")
     }
 
@@ -229,6 +334,7 @@ open class MorseDSPManager(
         squelchThreshold = clamped
         goertzelDetector.setSquelchThreshold(clamped)
         _dspState.update { it.copy(detectionThreshold = clamped) }
+        saveSettings()
         Log.d(TAG, "Squelch threshold updated to ${String.format("%.3f", clamped)}")
     }
 
@@ -256,8 +362,7 @@ open class MorseDSPManager(
         _dspState.update { it.copy(isCalibrating = true) }
         Log.d(TAG, "Starting noise floor calibration for ${durationMs}ms...")
 
-        val wasListeningBefore = _dspState.value.isListening
-        if (!wasListeningBefore) {
+        if (!_dspState.value.isListening) {
             startListening()
         }
 
@@ -275,10 +380,11 @@ open class MorseDSPManager(
         val avgNoise = if (calibrationSamples.isNotEmpty()) {
             calibrationSamples.average()
         } else {
-            DEFAULT_NOISE_FLOOR
+            noiseFloor.takeIf { it > 0.0 } ?: DEFAULT_NOISE_FLOOR
         }
 
-        val newThreshold = max(DEFAULT_THRESHOLD, avgNoise * 2.8)
+        val newThreshold = (avgNoise * 2.8).coerceIn(MIN_SQUELCH_MAGNITUDE, MAX_SQUELCH_MAGNITUDE)
+        noiseFloor = avgNoise
         setSquelchThreshold(newThreshold)
         _dspState.update {
             it.copy(
@@ -287,12 +393,9 @@ open class MorseDSPManager(
                 detectionThreshold = newThreshold
             )
         }
+        saveSettings()
 
         Log.d(TAG, "Calibration completed. Ambient Noise Floor: $avgNoise, Detection Threshold: $newThreshold")
-
-        if (!wasListeningBefore) {
-            stopListening()
-        }
 
         avgNoise
     }
@@ -391,13 +494,15 @@ open class MorseDSPManager(
                 result.spectralPurity >= MIN_SPECTRAL_PURITY
 
         // 4. Automatic pitch scanning & frequency lock mechanism
+        val minScanRms = (threshold * 0.4).coerceIn(0.003, 0.008)
+        val minFftPeak = (threshold * 0.35).coerceIn(0.002, fftAnalyzer.minMagnitudeThreshold)
         if (isAutoDetectPitchEnabled) {
             when (pitchLockState) {
                 PitchLockState.SEARCHING -> {
                     // If we have enough samples and audio energy is present, scan for CW peak frequency
                     if (fftBufferSamples >= 1024 &&
                         (now - lastFftScanTimeMs >= FFT_SCAN_INTERVAL_MS) &&
-                        (rawRms >= 0.008)
+                        (rawRms >= minScanRms)
                     ) {
                         lastFftScanTimeMs = now
                         val fftResult = fftAnalyzer.analyze(
@@ -408,11 +513,17 @@ open class MorseDSPManager(
                             targetFftSize = 2048
                         )
 
-                        if (fftResult.isToneDetected) {
+                        val isTonePeak = fftResult.isToneDetected ||
+                                (fftResult.peakMagnitude >= minFftPeak && fftResult.snr >= fftAnalyzer.minSnrThreshold)
+
+                        if (isTonePeak) {
                             val detectedFreq = fftResult.peakFrequencyHz.roundToInt().toDouble()
-                            setTargetFrequency(detectedFreq)
+                            targetFrequencyHz = detectedFreq
+                            retainedLockedFrequencyHz = detectedFreq
+                            goertzelDetector.setTargetFrequency(detectedFreq)
                             pitchLockState = PitchLockState.LOCKED
                             lastToneSeenTimeMs = now
+                            saveSettings()
                             result = goertzelDetector.process(buffer)
                             isToneDetected = result.targetMagnitude >= threshold &&
                                     result.spectralPurity >= MIN_SPECTRAL_PURITY
@@ -430,7 +541,7 @@ open class MorseDSPManager(
                             pitchLockState = PitchLockState.SEARCHING
                             lastToneSeenTimeMs = 0L
                             Log.d(TAG, "CW Pitch Lock Released after ${lockTimeoutMs}ms signal loss. Resuming frequency search.")
-                        } else if (fftBufferSamples >= 1024 && rawRms >= 0.015 && (now - lastFftScanTimeMs >= FFT_SCAN_INTERVAL_MS)) {
+                        } else if (fftBufferSamples >= 1024 && rawRms >= minScanRms && (now - lastFftScanTimeMs >= FFT_SCAN_INTERVAL_MS)) {
                             // Check if sender retuned to a different CW frequency
                             lastFftScanTimeMs = now
                             val fftResult = fftAnalyzer.analyze(
@@ -440,10 +551,15 @@ open class MorseDSPManager(
                                 maxFreqHz = MAX_CW_FREQ,
                                 targetFftSize = 2048
                             )
-                            if (fftResult.isToneDetected && abs(fftResult.peakFrequencyHz - targetFrequencyHz) >= 25.0) {
+                            val isTonePeak = fftResult.isToneDetected ||
+                                    (fftResult.peakMagnitude >= minFftPeak && fftResult.snr >= fftAnalyzer.minSnrThreshold)
+                            if (isTonePeak && abs(fftResult.peakFrequencyHz - targetFrequencyHz) >= 25.0) {
                                 val newFreq = fftResult.peakFrequencyHz.roundToInt().toDouble()
-                                setTargetFrequency(newFreq)
+                                targetFrequencyHz = newFreq
+                                retainedLockedFrequencyHz = newFreq
+                                goertzelDetector.setTargetFrequency(newFreq)
                                 lastToneSeenTimeMs = now
+                                saveSettings()
                                 result = goertzelDetector.process(buffer)
                                 isToneDetected = result.targetMagnitude >= threshold &&
                                         result.spectralPurity >= MIN_SPECTRAL_PURITY
@@ -478,6 +594,8 @@ open class MorseDSPManager(
                         currentMagnitude = result.targetMagnitude,
                         spectralPurity = result.spectralPurity,
                         rawRms = result.totalRms,
+                        noiseFloor = noiseFloor,
+                        detectionThreshold = threshold,
                         lastSilenceDurationMs = silenceDuration,
                         isPitchLocked = (pitchLockState == PitchLockState.LOCKED),
                         lockedFrequencyHz = if (pitchLockState == PitchLockState.LOCKED) targetFrequencyHz else null,
@@ -509,6 +627,8 @@ open class MorseDSPManager(
                         currentMagnitude = result.targetMagnitude,
                         spectralPurity = result.spectralPurity,
                         rawRms = result.totalRms,
+                        noiseFloor = noiseFloor,
+                        detectionThreshold = threshold,
                         lastToneDurationMs = toneDuration,
                         isPitchLocked = (pitchLockState == PitchLockState.LOCKED),
                         lockedFrequencyHz = if (pitchLockState == PitchLockState.LOCKED) targetFrequencyHz else null,
@@ -531,6 +651,8 @@ open class MorseDSPManager(
                     currentMagnitude = result.targetMagnitude,
                     spectralPurity = result.spectralPurity,
                     rawRms = result.totalRms,
+                    noiseFloor = noiseFloor,
+                    detectionThreshold = threshold,
                     isPitchLocked = (pitchLockState == PitchLockState.LOCKED),
                     lockedFrequencyHz = if (pitchLockState == PitchLockState.LOCKED) targetFrequencyHz else null,
                     targetFrequencyHz = targetFrequencyHz
@@ -547,16 +669,41 @@ open class MorseDSPManager(
     @SuppressLint("MissingPermission")
     @Synchronized
     open fun startListening() {
+        val now = System.currentTimeMillis()
+        lastStartListeningCallMs = now
         isDecodingActive = true
-        silenceStartTime = System.currentTimeMillis()
+        silenceStartTime = now
         toneActive = false
-        pitchLockState = PitchLockState.SEARCHING
-        lastToneSeenTimeMs = 0L
         lastFftScanTimeMs = 0L
         fftBufferSamples = 0
 
+        retainedLockedFrequencyHz?.let { lockedFreq ->
+            targetFrequencyHz = lockedFreq
+            pitchLockState = PitchLockState.LOCKED
+            lastToneSeenTimeMs = now
+        } ?: run {
+            if (pitchLockState == PitchLockState.LOCKED) {
+                lastToneSeenTimeMs = now
+            } else {
+                lastToneSeenTimeMs = 0L
+            }
+        }
+
+        goertzelDetector.setTargetFrequency(targetFrequencyHz)
+        goertzelDetector.setSquelchThreshold(squelchThreshold)
+
         if (_dspState.value.isListening) {
-            _dspState.update { it.copy(isListening = true, isDecodingActive = true) }
+            _dspState.update {
+                it.copy(
+                    isListening = true,
+                    isDecodingActive = true,
+                    detectionThreshold = squelchThreshold,
+                    noiseFloor = noiseFloor,
+                    isPitchLocked = (pitchLockState == PitchLockState.LOCKED),
+                    lockedFrequencyHz = if (pitchLockState == PitchLockState.LOCKED) targetFrequencyHz else null,
+                    targetFrequencyHz = targetFrequencyHz
+                )
+            }
             return
         }
 
@@ -645,6 +792,8 @@ open class MorseDSPManager(
             it.copy(
                 isListening = true,
                 isDecodingActive = true,
+                detectionThreshold = squelchThreshold,
+                noiseFloor = noiseFloor,
                 isPitchLocked = (pitchLockState == PitchLockState.LOCKED),
                 lockedFrequencyHz = if (pitchLockState == PitchLockState.LOCKED) targetFrequencyHz else null,
                 targetFrequencyHz = targetFrequencyHz
@@ -654,17 +803,37 @@ open class MorseDSPManager(
     }
 
     /**
+     * Stops listening only if a new screen did not just start listening during a navigation transition.
+     */
+    @Synchronized
+    open fun stopListeningOnNavigationDispose(graceWindowMs: Long = 80L) {
+        saveSettings()
+        val elapsed = System.currentTimeMillis() - lastStartListeningCallMs
+        if (elapsed < graceWindowMs) {
+            Log.d(TAG, "Skipping stopListening on navigation dispose (restarted ${elapsed}ms ago)")
+            return
+        }
+        stopListening()
+    }
+
+    /**
      * Stops the audio recording and DSP analysis loops.
      */
     @Synchronized
     @Suppress("DEPRECATION")
     open fun stopListening() {
+        if (pitchLockState == PitchLockState.LOCKED) {
+            retainedLockedFrequencyHz = targetFrequencyHz
+        }
+        saveSettings()
+
         isDecodingActive = false
-        pitchLockState = PitchLockState.SEARCHING
         lastToneSeenTimeMs = 0L
         lastFftScanTimeMs = 0L
         fftBufferSamples = 0
         toneActive = false
+
+        val preserveLock = retainedLockedFrequencyHz != null
 
         if (!_dspState.value.isListening) {
             _dspState.update {
@@ -673,8 +842,11 @@ open class MorseDSPManager(
                     isDecodingActive = false,
                     isTonePresent = false,
                     currentMagnitude = 0.0,
-                    isPitchLocked = false,
-                    lockedFrequencyHz = null
+                    detectionThreshold = squelchThreshold,
+                    noiseFloor = noiseFloor,
+                    isPitchLocked = preserveLock,
+                    lockedFrequencyHz = retainedLockedFrequencyHz,
+                    targetFrequencyHz = targetFrequencyHz
                 )
             }
             return
@@ -713,8 +885,11 @@ open class MorseDSPManager(
                     isDecodingActive = false,
                     isTonePresent = false,
                     currentMagnitude = 0.0,
-                    isPitchLocked = false,
-                    lockedFrequencyHz = null
+                    detectionThreshold = squelchThreshold,
+                    noiseFloor = noiseFloor,
+                    isPitchLocked = preserveLock,
+                    lockedFrequencyHz = retainedLockedFrequencyHz,
+                    targetFrequencyHz = targetFrequencyHz
                 )
             }
             Log.d(TAG, "MorseDSPManager listening stopped")

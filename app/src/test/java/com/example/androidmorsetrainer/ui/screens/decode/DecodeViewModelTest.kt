@@ -30,22 +30,46 @@ class FakeMorseDSPManager : MorseDSPManager(context = null) {
     var hasPermission: Boolean = true
     var isListeningStarted: Boolean = false
     var isListeningStopped: Boolean = false
+    var isCalibrateCalled: Boolean = false
     var lastSetFrequency: Double = 700.0
+    var lastSetSquelch: Double = MorseDSPManager.DEFAULT_THRESHOLD
 
     val fakeDspState = MutableStateFlow(DSPState())
     val fakeToneEvents = MutableSharedFlow<ToneEvent>(extraBufferCapacity = 64)
     val fakeRawAudio = MutableSharedFlow<ShortArray>(extraBufferCapacity = 64)
 
-    override val dspState: StateFlow<DSPState> = fakeDspState.asStateFlow()
+    override val dspState: StateFlow<DSPState> = fakeDspState.asSharedFlow().let { fakeDspState.asStateFlow() }
     override val toneEvents: SharedFlow<ToneEvent> = fakeToneEvents.asSharedFlow()
     override val rawAudioFlow: SharedFlow<ShortArray> = fakeRawAudio.asSharedFlow()
 
     override fun hasRecordPermission(): Boolean = hasPermission
 
     override fun setTargetFrequency(frequencyHz: Double) {
+        super.setTargetFrequency(frequencyHz)
         lastSetFrequency = frequencyHz
-        targetFrequencyHz = frequencyHz
         fakeDspState.update { it.copy(targetFrequencyHz = frequencyHz) }
+    }
+
+    override fun setSquelchThreshold(threshold: Double) {
+        super.setSquelchThreshold(threshold)
+        lastSetSquelch = squelchThreshold
+        fakeDspState.update { it.copy(detectionThreshold = squelchThreshold) }
+    }
+
+    override suspend fun calibrateNoiseFloor(durationMs: Long): Double {
+        isCalibrateCalled = true
+        super.setSquelchThreshold(0.012)
+        lastSetSquelch = 0.012
+        isListeningStarted = true
+        fakeDspState.update {
+            it.copy(
+                isListening = true,
+                isCalibrating = false,
+                noiseFloor = 0.004,
+                detectionThreshold = 0.012
+            )
+        }
+        return 0.004
     }
 
     override fun startListening() {
@@ -314,5 +338,53 @@ class DecodeViewModelTest {
         assertFalse(viewModel.isDecoding.value)
         assertFalse(viewModel.uiState.value.isListening)
     }
-}
 
+    @Test
+    fun onSetupOpened_startsListeningImmediately() = runTest(testDispatcher) {
+        fakeDspManager.hasPermission = true
+        assertFalse(viewModel.uiState.value.isListening)
+
+        viewModel.onSetupOpened()
+        advanceUntilIdle()
+
+        assertTrue(fakeDspManager.isListeningStarted)
+        assertTrue(viewModel.uiState.value.isListening)
+        assertTrue(viewModel.isDecoding.value)
+    }
+
+    @Test
+    fun calibrateNoiseFloor_and_setSquelchLevel_updateDspAndRetainSettings() = runTest(testDispatcher) {
+        viewModel.onSetupOpened()
+        advanceUntilIdle()
+
+        viewModel.calibrateNoiseFloor()
+        advanceUntilIdle()
+
+        assertTrue(fakeDspManager.isCalibrateCalled)
+        assertEquals(0.012, viewModel.uiState.value.detectionThreshold, 0.001)
+        assertEquals(0.004, viewModel.uiState.value.noiseFloor, 0.001)
+
+        viewModel.setSquelchLevel(0.25f)
+        viewModel.setTargetFrequency(620.0)
+        advanceUntilIdle()
+
+        val expectedMag = MorseDSPManager.squelchLevelToMagnitude(0.25f)
+        assertEquals(0.25f, viewModel.uiState.value.squelchLevel, 0.001f)
+        assertEquals(expectedMag, viewModel.uiState.value.detectionThreshold, 0.001)
+        assertEquals(620.0, viewModel.uiState.value.targetFrequencyHz, 0.01)
+
+        // When SetupScreen is disposed and a new DecodeViewModel is created, retained settings are restored
+        viewModel.onSetupDisposed()
+        advanceUntilIdle()
+
+        val nextViewModel = DecodeViewModel(
+            dspManager = fakeDspManager,
+            defaultDispatcher = testDispatcher
+        )
+        advanceUntilIdle()
+
+        assertEquals(0.25f, nextViewModel.uiState.value.squelchLevel, 0.001f)
+        assertEquals(expectedMag, nextViewModel.uiState.value.detectionThreshold, 0.001)
+        assertEquals(620.0, nextViewModel.uiState.value.targetFrequencyHz, 0.01)
+    }
+}

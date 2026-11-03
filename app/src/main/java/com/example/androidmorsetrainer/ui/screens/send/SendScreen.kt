@@ -71,6 +71,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
@@ -90,13 +93,33 @@ fun SendScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val currentView = LocalView.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Active Screen Wake-Lock while Send mode is active
-    DisposableEffect(Unit) {
+    // Immediately apply retained squelch/tone settings and start listening upon opening SendScreen
+    LaunchedEffect(Unit) {
+        viewModel.onSendScreenOpened()
+    }
+
+    // Active Screen Wake-Lock and lifecycle-aware audio capture while Send mode is active
+    DisposableEffect(lifecycleOwner) {
         currentView.keepScreenOn = true
+        viewModel.onSendScreenOpened()
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
+                    viewModel.onSendScreenOpened()
+                }
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    viewModel.stopListening()
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
             currentView.keepScreenOn = false
-            viewModel.stopListening()
+            viewModel.onSendScreenDisposed()
         }
     }
 

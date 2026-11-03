@@ -10,6 +10,7 @@ import com.example.androidmorsetrainer.MorseTrainerApplication
 import com.example.androidmorsetrainer.audio.MorseDSPManager
 import com.example.androidmorsetrainer.data.local.entity.CharacterStats
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
+import com.example.androidmorsetrainer.data.repository.DspSettings
 import com.example.androidmorsetrainer.data.repository.ProfileRepository
 import com.example.androidmorsetrainer.morse.CwDecoder
 import com.example.androidmorsetrainer.morse.KochMethodManager
@@ -85,6 +86,7 @@ class SendViewModel(
     private var isEvaluating: Boolean = false
 
     init {
+        applyRetainedSettings()
         observeDspState()
         observeToneEvents()
         observeDecoder()
@@ -93,6 +95,82 @@ class SendViewModel(
         if (hasPerm) {
             dspManager.startListening()
         }
+    }
+
+    /**
+     * Loads and applies persisted squelch and tone settings from ProfileRepository and MorseDSPManager.
+     */
+    fun applyRetainedSettings() {
+        val saved = profileRepository.getDspSettings()
+        if (saved != null) {
+            dspManager.setTargetFrequency(saved.targetFrequencyHz)
+            dspManager.setSquelchThreshold(saved.squelchThreshold)
+            _squelchLevel.value = saved.squelchLevel
+            _uiState.update {
+                it.copy(
+                    targetFrequencyHz = saved.targetFrequencyHz,
+                    detectionThreshold = saved.squelchThreshold,
+                    squelchLevel = saved.squelchLevel,
+                    isPitchLocked = saved.isPitchLocked || dspManager.dspState.value.isPitchLocked,
+                    lockedFrequencyHz = saved.lockedFrequencyHz ?: dspManager.dspState.value.lockedFrequencyHz
+                )
+            }
+        } else {
+            val threshold = dspManager.squelchThreshold
+            val level = MorseDSPManager.magnitudeToSquelchLevel(threshold)
+            val freq = dspManager.targetFrequencyHz
+            val dsp = dspManager.dspState.value
+            _squelchLevel.value = level
+            _uiState.update {
+                it.copy(
+                    targetFrequencyHz = freq,
+                    detectionThreshold = threshold,
+                    squelchLevel = level,
+                    isPitchLocked = dsp.isPitchLocked,
+                    lockedFrequencyHz = dsp.lockedFrequencyHz
+                )
+            }
+        }
+    }
+
+    /**
+     * Persists current squelch and tone settings to ProfileRepository.
+     */
+    fun saveRetainedSettings() {
+        val dsp = dspManager.dspState.value
+        val threshold = dspManager.squelchThreshold
+        val level = MorseDSPManager.magnitudeToSquelchLevel(threshold)
+        val freq = dspManager.targetFrequencyHz
+        profileRepository.saveDspSettings(
+            DspSettings(
+                squelchThreshold = threshold,
+                squelchLevel = level,
+                targetFrequencyHz = freq,
+                noiseFloor = dsp.noiseFloor,
+                isPitchLocked = dsp.isPitchLocked,
+                lockedFrequencyHz = dsp.lockedFrequencyHz ?: if (dsp.isPitchLocked) freq else null
+            )
+        )
+    }
+
+    /**
+     * Called when SendScreen is opened or resumed to apply retained settings and start listening immediately.
+     */
+    fun onSendScreenOpened() {
+        applyRetainedSettings()
+        val hasPerm = dspManager.hasRecordPermission()
+        _uiState.update { it.copy(hasRecordPermission = hasPerm) }
+        if (hasPerm && !_uiState.value.isSessionFinished) {
+            dspManager.startListening()
+        }
+    }
+
+    /**
+     * Called when SendScreen leaves composition to save settings and clean up listener if not replaced.
+     */
+    fun onSendScreenDisposed() {
+        saveRetainedSettings()
+        dspManager.stopListeningOnNavigationDispose()
     }
 
     private fun observeDspState() {
@@ -110,6 +188,18 @@ class SendViewModel(
                         targetFrequencyHz = dsp.targetFrequencyHz,
                         isPitchLocked = dsp.isPitchLocked,
                         lockedFrequencyHz = dsp.lockedFrequencyHz
+                    )
+                }
+                if (dsp.isPitchLocked) {
+                    profileRepository.saveDspSettings(
+                        DspSettings(
+                            squelchThreshold = dsp.detectionThreshold,
+                            squelchLevel = level,
+                            targetFrequencyHz = dsp.targetFrequencyHz,
+                            noiseFloor = dsp.noiseFloor,
+                            isPitchLocked = dsp.isPitchLocked,
+                            lockedFrequencyHz = dsp.lockedFrequencyHz
+                        )
                     )
                 }
             }
@@ -166,9 +256,22 @@ class SendViewModel(
      * Sets or updates the active profile and prepares the Pre-Drill Setup / Calibration state.
      */
     fun setActiveProfile(profile: UserProfile?) {
+        applyRetainedSettings()
         if (profile == null) {
             sessionCharacterAttempts.clear()
-            _uiState.update { SendUiState() }
+            _uiState.update {
+                SendUiState(
+                    hasRecordPermission = it.hasRecordPermission,
+                    isListening = it.isListening,
+                    targetFrequencyHz = it.targetFrequencyHz,
+                    isPitchLocked = it.isPitchLocked,
+                    lockedFrequencyHz = it.lockedFrequencyHz,
+                    detectionThreshold = it.detectionThreshold,
+                    squelchLevel = it.squelchLevel,
+                    selectedDrillLength = sessionBatchSize,
+                    sessionBatchSize = sessionBatchSize
+                )
+            }
             return
         }
 
@@ -288,6 +391,7 @@ class SendViewModel(
                 )
             }
 
+            applyRetainedSettings()
             if (dspManager.hasRecordPermission()) {
                 dspManager.startListening()
             }
@@ -300,6 +404,7 @@ class SendViewModel(
     fun returnToSetup() {
         sessionCharacterAttempts.clear()
         activeDecoder.clear()
+        applyRetainedSettings()
         _uiState.update {
             it.copy(
                 isSessionActive = false,
@@ -533,6 +638,7 @@ class SendViewModel(
      * Starts microphone audio capture and Goertzel DSP analysis.
      */
     fun startListening() {
+        applyRetainedSettings()
         if (!dspManager.hasRecordPermission()) {
             _uiState.update {
                 it.copy(
@@ -550,6 +656,7 @@ class SendViewModel(
      * Stops microphone audio recording and analysis.
      */
     fun stopListening() {
+        saveRetainedSettings()
         dspManager.stopListening()
     }
 
@@ -570,6 +677,7 @@ class SendViewModel(
     fun setTargetFrequency(frequencyHz: Double) {
         dspManager.setTargetFrequency(frequencyHz)
         _uiState.update { it.copy(targetFrequencyHz = frequencyHz, isCustomFrequency = false) }
+        saveRetainedSettings()
     }
 
     /**
@@ -592,6 +700,7 @@ class SendViewModel(
         if (parsedFreq != null && parsedFreq in 100.0..3000.0) {
             dspManager.setTargetFrequency(parsedFreq)
             _uiState.update { it.copy(targetFrequencyHz = parsedFreq) }
+            saveRetainedSettings()
         }
     }
 
@@ -603,6 +712,13 @@ class SendViewModel(
         _squelchLevel.value = clamped
         val magnitude = MorseDSPManager.squelchLevelToMagnitude(clamped)
         dspManager.setSquelchThreshold(magnitude)
+        _uiState.update {
+            it.copy(
+                squelchLevel = clamped,
+                detectionThreshold = magnitude
+            )
+        }
+        saveRetainedSettings()
     }
 
     /**

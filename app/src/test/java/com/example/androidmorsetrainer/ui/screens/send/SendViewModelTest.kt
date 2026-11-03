@@ -3,6 +3,7 @@ package com.example.androidmorsetrainer.ui.screens.send
 import com.example.androidmorsetrainer.audio.MorseDSPManager
 import com.example.androidmorsetrainer.data.local.entity.CharacterStats
 import com.example.androidmorsetrainer.data.local.entity.UserProfile
+import com.example.androidmorsetrainer.data.repository.DspSettings
 import com.example.androidmorsetrainer.data.repository.ProfileRepository
 import com.example.androidmorsetrainer.morse.KochMethodManager
 import kotlinx.coroutines.Dispatchers
@@ -47,14 +48,15 @@ class FakeMorseDSPManager : MorseDSPManager(context = null) {
     override fun hasRecordPermission(): Boolean = hasPermission
 
     override fun setTargetFrequency(frequencyHz: Double) {
+        super.setTargetFrequency(frequencyHz)
         lastSetFrequency = frequencyHz
-        targetFrequencyHz = frequencyHz
         fakeDspState.update { it.copy(targetFrequencyHz = frequencyHz) }
     }
 
     override fun setSquelchThreshold(threshold: Double) {
-        lastSetSquelch = threshold
-        fakeDspState.update { it.copy(detectionThreshold = threshold) }
+        super.setSquelchThreshold(threshold)
+        lastSetSquelch = squelchThreshold
+        fakeDspState.update { it.copy(detectionThreshold = squelchThreshold) }
     }
 
     override fun startListening() {
@@ -72,8 +74,15 @@ class FakeProfileRepository : ProfileRepository {
     private val profilesFlow = MutableStateFlow<List<UserProfile>>(emptyList())
     private val characterStatsMap = mutableMapOf<Pair<Long, String>, CharacterStats>()
     private var nextProfileId = 1L
+    private var retainedDspSettings: DspSettings? = null
 
     override val allProfiles: Flow<List<UserProfile>> = profilesFlow.asStateFlow()
+
+    override fun saveDspSettings(settings: DspSettings) {
+        retainedDspSettings = settings
+    }
+
+    override fun getDspSettings(): DspSettings? = retainedDspSettings
 
     override suspend fun getAllProfiles(): List<UserProfile> = profilesFlow.value
 
@@ -467,5 +476,50 @@ class SendViewModelTest {
         assertFalse(viewModel.uiState.value.isPitchLocked)
         assertNull(viewModel.uiState.value.lockedFrequencyHz)
         assertEquals(650.0, viewModel.uiState.value.targetFrequencyHz, 0.01)
+    }
+
+    @Test
+    fun retainedSettings_loadedOnInitAndPreservedAcrossProfileChanges() = runTest {
+        val calibratedLevel = 0.03f
+        val calibratedThreshold = MorseDSPManager.squelchLevelToMagnitude(calibratedLevel)
+        profileRepository.saveDspSettings(
+            DspSettings(
+                squelchThreshold = calibratedThreshold,
+                squelchLevel = calibratedLevel,
+                targetFrequencyHz = 615.0,
+                noiseFloor = 0.005,
+                isPitchLocked = true,
+                lockedFrequencyHz = 615.0
+            )
+        )
+
+        val newSendVm = SendViewModel(
+            profileRepository = profileRepository,
+            kochMethodManager = kochMethodManager,
+            dspManager = dspManager,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            sessionBatchSize = 5
+        )
+        advanceUntilIdle()
+
+        assertEquals(calibratedLevel, newSendVm.uiState.value.squelchLevel, 0.001f)
+        assertEquals(calibratedThreshold, newSendVm.uiState.value.detectionThreshold, 0.001)
+        assertEquals(615.0, newSendVm.uiState.value.targetFrequencyHz, 0.01)
+        assertEquals(calibratedThreshold, dspManager.lastSetSquelch, 0.001)
+        assertEquals(615.0, dspManager.lastSetFrequency, 0.01)
+
+        // Setting profile to null or testProfile must NOT wipe out retained squelch or tone settings
+        newSendVm.setActiveProfile(null)
+        advanceUntilIdle()
+        assertEquals(calibratedLevel, newSendVm.uiState.value.squelchLevel, 0.001f)
+        assertEquals(calibratedThreshold, newSendVm.uiState.value.detectionThreshold, 0.001)
+        assertEquals(615.0, newSendVm.uiState.value.targetFrequencyHz, 0.01)
+
+        newSendVm.setActiveProfile(testProfile)
+        advanceUntilIdle()
+        assertEquals(calibratedLevel, newSendVm.uiState.value.squelchLevel, 0.001f)
+        assertEquals(calibratedThreshold, newSendVm.uiState.value.detectionThreshold, 0.001)
+        assertEquals(615.0, newSendVm.uiState.value.targetFrequencyHz, 0.01)
     }
 }

@@ -1,5 +1,6 @@
 package com.example.androidmorsetrainer.data.repository
 
+import com.example.androidmorsetrainer.audio.MorseDSPManager
 import com.example.androidmorsetrainer.data.local.dao.CharacterStatsDao
 import com.example.androidmorsetrainer.data.local.dao.UserProfileDao
 import com.example.androidmorsetrainer.data.local.entity.CharacterStats
@@ -8,6 +9,18 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+
+/**
+ * Retained DSP calibration and tone settings shared across Setup, Decode, and Send screens.
+ */
+data class DspSettings(
+    val squelchThreshold: Double = MorseDSPManager.DEFAULT_THRESHOLD,
+    val squelchLevel: Float = MorseDSPManager.magnitudeToSquelchLevel(MorseDSPManager.DEFAULT_THRESHOLD),
+    val targetFrequencyHz: Double = 700.0,
+    val noiseFloor: Double = MorseDSPManager.DEFAULT_NOISE_FLOOR,
+    val isPitchLocked: Boolean = false,
+    val lockedFrequencyHz: Double? = null
+)
 
 interface ProfileRepository {
     val allProfiles: Flow<List<UserProfile>>
@@ -27,6 +40,8 @@ interface ProfileRepository {
     suspend fun saveTimeAttackReport(report: com.example.androidmorsetrainer.data.local.entity.TimeAttackReport): Long
     suspend fun getTimeAttackReports(profileId: Long): List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport>
     fun getTimeAttackReportsFlow(profileId: Long): Flow<List<com.example.androidmorsetrainer.data.local.entity.TimeAttackReport>>
+    fun saveDspSettings(settings: DspSettings) {}
+    fun getDspSettings(): DspSettings? = null
 }
 
 class ProfileRepositoryImpl(
@@ -34,6 +49,15 @@ class ProfileRepositoryImpl(
     private val characterStatsDao: CharacterStatsDao,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ProfileRepository {
+
+    @Volatile
+    private var retainedDspSettings: DspSettings? = null
+
+    override fun saveDspSettings(settings: DspSettings) {
+        retainedDspSettings = settings
+    }
+
+    override fun getDspSettings(): DspSettings? = retainedDspSettings
 
     override val allProfiles: Flow<List<UserProfile>> = userProfileDao.getAllProfilesFlow()
 

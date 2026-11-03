@@ -9,17 +9,16 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.androidmorsetrainer.MorseTrainerApplication
 import com.example.androidmorsetrainer.audio.FFTAnalyzer
 import com.example.androidmorsetrainer.audio.MorseDSPManager
+import com.example.androidmorsetrainer.data.repository.DspSettings
+import com.example.androidmorsetrainer.data.repository.ProfileRepository
 import com.example.androidmorsetrainer.morse.CwDecoder
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
@@ -28,6 +27,7 @@ import kotlin.math.sqrt
  */
 class DecodeViewModel(
     val dspManager: MorseDSPManager,
+    private val profileRepository: ProfileRepository? = null,
     private val fftAnalyzer: FFTAnalyzer = FFTAnalyzer(),
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : ViewModel() {
@@ -40,7 +40,8 @@ class DecodeViewModel(
             initializer {
                 val application = (this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as MorseTrainerApplication)
                 DecodeViewModel(
-                    dspManager = application.container.morseDSPManager
+                    dspManager = application.container.morseDSPManager,
+                    profileRepository = application.container.profileRepository
                 )
             }
         }
@@ -64,6 +65,7 @@ class DecodeViewModel(
             lockedFrequencyHz = dspManager.dspState.value.lockedFrequencyHz,
             detectionThreshold = dspManager.squelchThreshold,
             squelchLevel = MorseDSPManager.magnitudeToSquelchLevel(dspManager.squelchThreshold),
+            noiseFloor = dspManager.noiseFloor,
             rawAmplitudes = List(MAX_AMPLITUDE_POINTS) { 0.0f },
             amplitudePoints = List(MAX_AMPLITUDE_POINTS) { AmplitudePoint(0.0f, false) }
         )
@@ -86,10 +88,94 @@ class DecodeViewModel(
     )
 
     init {
+        applyRetainedSettings()
         observeDspState()
         observeToneEvents()
         observeRawAudio()
         observeDecoder()
+    }
+
+    /**
+     * Loads and applies any retained squelch and tone settings from ProfileRepository or MorseDSPManager.
+     */
+    fun applyRetainedSettings() {
+        val repoSettings = profileRepository?.getDspSettings()
+        if (repoSettings != null) {
+            dspManager.setSquelchThreshold(repoSettings.squelchThreshold)
+            if (repoSettings.isPitchLocked && repoSettings.lockedFrequencyHz != null) {
+                dspManager.lockOnFrequency(repoSettings.lockedFrequencyHz)
+            } else {
+                dspManager.setTargetFrequency(repoSettings.targetFrequencyHz)
+            }
+            val level = MorseDSPManager.magnitudeToSquelchLevel(repoSettings.squelchThreshold)
+            _squelchLevel.value = level
+            _uiState.update {
+                it.copy(
+                    detectionThreshold = repoSettings.squelchThreshold,
+                    squelchLevel = level,
+                    targetFrequencyHz = repoSettings.targetFrequencyHz,
+                    noiseFloor = repoSettings.noiseFloor,
+                    isPitchLocked = repoSettings.isPitchLocked,
+                    lockedFrequencyHz = repoSettings.lockedFrequencyHz
+                )
+            }
+        } else {
+            val threshold = dspManager.squelchThreshold
+            val level = MorseDSPManager.magnitudeToSquelchLevel(threshold)
+            val freq = dspManager.targetFrequencyHz
+            val lockedFreq = dspManager.retainedLockedFrequencyHz ?: dspManager.dspState.value.lockedFrequencyHz
+            val isLocked = dspManager.dspState.value.isPitchLocked || lockedFreq != null
+            _squelchLevel.value = level
+            _uiState.update {
+                it.copy(
+                    detectionThreshold = threshold,
+                    squelchLevel = level,
+                    targetFrequencyHz = freq,
+                    noiseFloor = dspManager.noiseFloor,
+                    isPitchLocked = isLocked,
+                    lockedFrequencyHz = lockedFreq
+                )
+            }
+        }
+    }
+
+    /**
+     * Persists the current calibrated squelch and tone settings to ProfileRepository and MorseDSPManager.
+     */
+    fun saveRetainedSettings() {
+        val state = _uiState.value
+        val threshold = dspManager.squelchThreshold
+        val level = MorseDSPManager.magnitudeToSquelchLevel(threshold)
+        val targetFreq = dspManager.targetFrequencyHz
+        val lockedFreq = dspManager.retainedLockedFrequencyHz ?: state.lockedFrequencyHz ?: if (state.isPitchLocked) targetFreq else null
+        val isLocked = state.isPitchLocked || lockedFreq != null
+        profileRepository?.saveDspSettings(
+            DspSettings(
+                squelchThreshold = threshold,
+                squelchLevel = level,
+                targetFrequencyHz = targetFreq,
+                noiseFloor = state.noiseFloor,
+                isPitchLocked = isLocked,
+                lockedFrequencyHz = lockedFreq
+            )
+        )
+        dspManager.saveSettings()
+    }
+
+    /**
+     * Called when the Setup screen is opened to immediately apply settings and start listening.
+     */
+    fun onSetupOpened() {
+        applyRetainedSettings()
+        startListening()
+    }
+
+    /**
+     * Called when leaving the Setup screen to persist settings and release mic if not transitioning to another audio tab.
+     */
+    fun onSetupDisposed() {
+        saveRetainedSettings()
+        dspManager.stopListeningOnNavigationDispose()
     }
 
     private fun observeDspState() {
@@ -115,6 +201,18 @@ class DecodeViewModel(
                         targetFrequencyHz = dsp.targetFrequencyHz
                     )
                 }
+                if (dsp.isPitchLocked) {
+                    profileRepository?.saveDspSettings(
+                        DspSettings(
+                            squelchThreshold = dsp.detectionThreshold,
+                            squelchLevel = level,
+                            targetFrequencyHz = dsp.targetFrequencyHz,
+                            noiseFloor = dsp.noiseFloor,
+                            isPitchLocked = true,
+                            lockedFrequencyHz = dsp.lockedFrequencyHz ?: dsp.targetFrequencyHz
+                        )
+                    )
+                }
             }
         }
     }
@@ -127,6 +225,13 @@ class DecodeViewModel(
         _squelchLevel.value = clamped
         val magnitude = MorseDSPManager.squelchLevelToMagnitude(clamped)
         dspManager.setSquelchThreshold(magnitude)
+        _uiState.update {
+            it.copy(
+                squelchLevel = clamped,
+                detectionThreshold = magnitude
+            )
+        }
+        saveRetainedSettings()
     }
 
     private fun observeToneEvents() {
@@ -198,6 +303,7 @@ class DecodeViewModel(
      * Starts microphone audio capture and Goertzel DSP analysis.
      */
     fun startListening() {
+        applyRetainedSettings()
         if (!dspManager.hasRecordPermission()) {
             _uiState.update {
                 it.copy(
@@ -215,6 +321,7 @@ class DecodeViewModel(
      * Stops microphone audio recording and analysis.
      */
     fun stopListening() {
+        saveRetainedSettings()
         dspManager.stopListening()
     }
 
@@ -235,15 +342,40 @@ class DecodeViewModel(
     fun setTargetFrequency(frequencyHz: Double) {
         dspManager.setTargetFrequency(frequencyHz)
         _uiState.update { it.copy(targetFrequencyHz = frequencyHz) }
+        saveRetainedSettings()
     }
 
     /**
-     * Calibrates the ambient noise floor for 1 second.
+     * Calibrates the ambient noise floor for 1 second and persists the resulting squelch threshold.
      */
     fun calibrateNoiseFloor() {
+        if (!dspManager.hasRecordPermission()) {
+            _uiState.update {
+                it.copy(
+                    hasRecordPermission = false,
+                    userMessage = "Microphone permission is required to calibrate squelch."
+                )
+            }
+            return
+        }
         viewModelScope.launch {
             try {
-                dspManager.calibrateNoiseFloor()
+                if (!_uiState.value.isListening) {
+                    dspManager.startListening()
+                }
+                val avgNoise = dspManager.calibrateNoiseFloor()
+                val newThreshold = dspManager.squelchThreshold
+                val newLevel = MorseDSPManager.magnitudeToSquelchLevel(newThreshold)
+                _squelchLevel.value = newLevel
+                _uiState.update {
+                    it.copy(
+                        noiseFloor = avgNoise,
+                        detectionThreshold = newThreshold,
+                        squelchLevel = newLevel,
+                        userMessage = "Squelch calibrated to ${String.format("%.3f", newThreshold)} mag"
+                    )
+                }
+                saveRetainedSettings()
             } catch (e: Exception) {
                 Log.e(TAG, "Calibration error: ${e.message}")
             }
@@ -276,6 +408,7 @@ class DecodeViewModel(
 
     public override fun onCleared() {
         super.onCleared()
+        saveRetainedSettings()
         dspManager.stopListening()
     }
 }
